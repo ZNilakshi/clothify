@@ -13,6 +13,8 @@ import {
     ListItem,
     ListItemText,
     Divider,
+    Popover,
+    Grid,
 } from "@mui/material";
 import {
     ShoppingCartOutlined,
@@ -26,6 +28,8 @@ import { useNavigate } from "react-router-dom";
 import { useState, useEffect } from "react";
 import authService from "../services/authService";
 import cartService from "../services/cartService";
+import categoryService from "../services/categoryService";
+import subCategoryService from "../services/subCategoryService";
 
 const Navbar = () => {
     const navigate = useNavigate();
@@ -35,14 +39,38 @@ const Navbar = () => {
     const [mobileOpen, setMobileOpen] = useState(false);
     const [searchOpen, setSearchOpen] = useState(false);
     const [searchValue, setSearchValue] = useState("");
+    const [categories, setCategories] = useState([]);
+    const [subCategories, setSubCategories] = useState([]);
+    const [megaMenuAnchor, setMegaMenuAnchor] = useState(null);
+    const [selectedCategory, setSelectedCategory] = useState(null);
 
     useEffect(() => {
         setUser(authService.getCurrentUser());
         updateCartCount();
+        fetchCategories();
+        fetchSubCategories();
 
         window.addEventListener("cartUpdated", updateCartCount);
         return () => window.removeEventListener("cartUpdated", updateCartCount);
     }, []);
+
+    const fetchCategories = async () => {
+        try {
+            const data = await categoryService.getAllCategories();
+            setCategories(data);
+        } catch (err) {
+            console.error("Error fetching categories:", err);
+        }
+    };
+
+    const fetchSubCategories = async () => {
+        try {
+            const data = await subCategoryService.getAllSubCategories();
+            setSubCategories(data);
+        } catch (err) {
+            console.error("Error fetching subcategories:", err);
+        }
+    };
 
     const updateCartCount = () => {
         setCartItemCount(cartService.getCartItemCount());
@@ -54,6 +82,38 @@ const Navbar = () => {
         setAnchorEl(null);
         navigate("/");
         window.location.reload();
+    };
+
+    const handleCategoryClick = (categoryId) => {
+        navigate(`/category/${categoryId}`);
+        handleCloseMegaMenu();
+        setMobileOpen(false);
+    };
+
+    const handleSubCategoryClick = (subCategoryId) => {
+        navigate(`/subcategory/${subCategoryId}`);
+        handleCloseMegaMenu();
+    };
+
+    const handleCategoryHover = (event, category) => {
+        setMegaMenuAnchor(event.currentTarget);
+        setSelectedCategory(category);
+    };
+
+    const handleCloseMegaMenu = () => {
+        setMegaMenuAnchor(null);
+        setSelectedCategory(null);
+    };
+
+    const getImageUrl = (imageUrl) => {
+        if (!imageUrl) return null;
+        if (imageUrl.startsWith("http")) return imageUrl;
+        const cleanPath = imageUrl.startsWith("/") ? imageUrl : `/${imageUrl}`;
+        return `http://localhost:8080${cleanPath}`;
+    };
+
+    const getSubCategoriesForCategory = (categoryId) => {
+        return subCategories.filter((sub) => sub.categoryId === categoryId);
     };
 
     const toggleMobileMenu = () => {
@@ -70,51 +130,44 @@ const Navbar = () => {
 
             <Divider />
 
-            {["Shop", "Women", "Men", "Accessories", "Offers"].map((text) => (
-                <ListItem
-                    button
-                    key={text}
-                    onClick={() => {
-                        navigate("/");
-                        setMobileOpen(false);
-                    }}
-                >
-                    <ListItemText primary={text} />
-                </ListItem>
+            <ListItem button onClick={() => { navigate("/"); setMobileOpen(false); }}>
+                <ListItemText primary="Home" />
+            </ListItem>
+
+            {categories.map((category) => (
+                <Box key={category.categoryId}>
+                    <ListItem button onClick={() => handleCategoryClick(category.categoryId)}>
+                        <ListItemText primary={category.categoryName} />
+                    </ListItem>
+                    {getSubCategoriesForCategory(category.categoryId).map((sub) => (
+                        <ListItem
+                            key={sub.subCategoryId}
+                            button
+                            sx={{ pl: 4 }}
+                            onClick={() => {
+                                handleSubCategoryClick(sub.subCategoryId);
+                                setMobileOpen(false);
+                            }}
+                        >
+                            <ListItemText primary={sub.subCategoryName} secondary="" />
+                        </ListItem>
+                    ))}
+                </Box>
             ))}
 
             <Divider sx={{ my: 1 }} />
 
             {user ? (
                 <>
-                    <ListItem
-                        button
-                        onClick={() => {
-                            navigate("/dashboard/");
-                            setMobileOpen(false);
-                        }}
-                    >
+                    <ListItem button onClick={() => { navigate("/admin/dashboard"); setMobileOpen(false); }}>
                         <ListItemText primary="Dashboard" />
                     </ListItem>
-
-                    <ListItem
-                        button
-                        onClick={() => {
-                            handleLogout();
-                            setMobileOpen(false);
-                        }}
-                    >
+                    <ListItem button onClick={() => { handleLogout(); setMobileOpen(false); }}>
                         <ListItemText primary="Logout" />
                     </ListItem>
                 </>
             ) : (
-                <ListItem
-                    button
-                    onClick={() => {
-                        navigate("/login");
-                        setMobileOpen(false);
-                    }}
-                >
+                <ListItem button onClick={() => { navigate("/login"); setMobileOpen(false); }}>
                     <ListItemText primary="Sign In" />
                 </ListItem>
             )}
@@ -143,26 +196,14 @@ const Navbar = () => {
                     }}
                 >
                     {/* LEFT */}
-                    <Box
-                        sx={{
-                            flex: 1,
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 1,
-                        }}
-                    >
-                        {/* Mobile menu */}
+                    <Box sx={{ flex: 1, display: "flex", alignItems: "center", gap: 1 }}>
                         <IconButton
-                            sx={{
-                                color: "#fff",
-                                display: { xs: "flex", md: "none" },
-                            }}
+                            sx={{ color: "#fff", display: { xs: "flex", md: "none" } }}
                             onClick={toggleMobileMenu}
                         >
                             <MenuOutlined />
                         </IconButton>
 
-                        {/* Desktop home */}
                         <Typography
                             onClick={() => navigate("/")}
                             sx={{
@@ -170,6 +211,7 @@ const Navbar = () => {
                                 fontWeight: 600,
                                 cursor: "pointer",
                                 display: { xs: "none", md: "block" },
+                                "&:hover": { opacity: 0.8 },
                             }}
                         >
                             HOME
@@ -186,22 +228,28 @@ const Navbar = () => {
                             gap: 4,
                         }}
                     >
-                        {["SHOP", "WOMEN", "MEN", "ACCESSORIES", "OFFERS"].map(
-                            (item) => (
-                                <Typography
-                                    key={item}
-                                    sx={{
-                                        color: "#fff",
-                                        fontSize: 14,
-                                        cursor: "pointer",
-                                        opacity: 0.85,
-                                        "&:hover": { opacity: 1 },
-                                    }}
-                                >
-                                    {item}
-                                </Typography>
-                            )
-                        )}
+                        {categories.map((category) => (
+                            <Typography
+                                key={category.categoryId}
+                                onMouseEnter={(e) => handleCategoryHover(e, category)}
+                                onClick={() => handleCategoryClick(category.categoryId)}
+                                sx={{
+                                    color: "#fff",
+                                    fontSize: 14,
+                                    cursor: "pointer",
+                                    opacity: 0.85,
+                                    textTransform: "uppercase",
+                                    letterSpacing: 1,
+                                    transition: "all 0.3s",
+                                    "&:hover": {
+                                        opacity: 1,
+                                        transform: "translateY(-2px)",
+                                    },
+                                }}
+                            >
+                                {category.categoryName}
+                            </Typography>
+                        ))}
 
                         <Typography
                             sx={{
@@ -210,6 +258,7 @@ const Navbar = () => {
                                 letterSpacing: 2,
                                 mx: 2,
                                 cursor: "pointer",
+                                "&:hover": { opacity: 0.8 },
                             }}
                             onClick={() => navigate("/")}
                         >
@@ -218,14 +267,7 @@ const Navbar = () => {
                     </Box>
 
                     {/* RIGHT */}
-                    <Box
-                        sx={{
-                            flex: 1,
-                            display: "flex",
-                            justifyContent: "flex-end",
-                            gap: 2,
-                        }}
-                    >
+                    <Box sx={{ flex: 1, display: "flex", justifyContent: "flex-end", gap: 2 }}>
                         {searchOpen ? (
                             <Box
                                 sx={{
@@ -244,9 +286,7 @@ const Navbar = () => {
                                     onChange={(e) => {
                                         setSearchValue(e.target.value);
                                         window.dispatchEvent(
-                                            new CustomEvent("navbarSearch", {
-                                                detail: e.target.value,
-                                            })
+                                            new CustomEvent("navbarSearch", { detail: e.target.value })
                                         );
                                     }}
                                     onBlur={() => setSearchOpen(false)}
@@ -260,28 +300,18 @@ const Navbar = () => {
                                 />
                             </Box>
                         ) : (
-                            <IconButton
-                                sx={{ color: "#fff" }}
-                                onClick={() => setSearchOpen(true)}
-                            >
+                            <IconButton sx={{ color: "#fff" }} onClick={() => setSearchOpen(true)}>
                                 <SearchOutlined />
                             </IconButton>
                         )}
 
-
-                        <IconButton
-                            sx={{ color: "#fff" }}
-                            onClick={() => navigate("/cart")}
-                        >
+                        <IconButton sx={{ color: "#fff" }} onClick={() => navigate("/cart")}>
                             <Badge badgeContent={cartItemCount} color="error">
                                 <ShoppingCartOutlined />
                             </Badge>
                         </IconButton>
 
-                        <IconButton
-                            sx={{ color: "#fff" }}
-                            onClick={(e) => setAnchorEl(e.currentTarget)}
-                        >
+                        <IconButton sx={{ color: "#fff" }} onClick={(e) => setAnchorEl(e.currentTarget)}>
                             {user ? (
                                 <Avatar
                                     sx={{
@@ -303,20 +333,12 @@ const Navbar = () => {
                             anchorEl={anchorEl}
                             open={Boolean(anchorEl)}
                             onClose={() => setAnchorEl(null)}
-                            anchorOrigin={{
-                                vertical: "bottom",
-                                horizontal: "right",
-                            }}
-                            transformOrigin={{
-                                vertical: "top",
-                                horizontal: "right",
-                            }}
+                            anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+                            transformOrigin={{ vertical: "top", horizontal: "right" }}
                         >
                             {user ? (
                                 <>
-                                    <MenuItem
-                                        onClick={() => navigate("/admin/dashboard")}
-                                    >
+                                    <MenuItem onClick={() => { navigate("/admin/dashboard"); setAnchorEl(null); }}>
                                         <Dashboard sx={{ mr: 1 }} />
                                         Dashboard
                                     </MenuItem>
@@ -326,9 +348,7 @@ const Navbar = () => {
                                     </MenuItem>
                                 </>
                             ) : (
-                                <MenuItem
-                                    onClick={() => navigate("/login")}
-                                >
+                                <MenuItem onClick={() => { navigate("/login"); setAnchorEl(null); }}>
                                     Sign In
                                 </MenuItem>
                             )}
@@ -336,6 +356,104 @@ const Navbar = () => {
                     </Box>
                 </Toolbar>
             </AppBar>
+
+            {/* MEGA MENU */}
+            <Popover
+                open={Boolean(megaMenuAnchor)}
+                anchorEl={megaMenuAnchor}
+                onClose={handleCloseMegaMenu}
+                anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+                transformOrigin={{ vertical: "top", horizontal: "center" }}
+                disableRestoreFocus
+                sx={{
+                    pointerEvents: "none",
+                    "& .MuiPopover-paper": {
+                        pointerEvents: "auto",
+                        mt: 2,
+                        borderRadius: 4,
+                        boxShadow: "0 20px 60px rgba(0,0,0,0.3)",
+                        overflow: "visible",
+                    },
+                }}
+                PaperProps={{
+                    onMouseLeave: handleCloseMegaMenu,
+                    sx: {
+                        backgroundColor: "#000",
+                        color: "#fff",
+                        minWidth: 800,
+                        maxWidth: 1000,
+                    },
+                }}
+            >
+                {selectedCategory && (
+                    <Grid container sx={{ p: 4 }}>
+                        {/* LEFT - Category Image */}
+                        <Grid item xs={5}>
+                            <Box
+                                sx={{
+                                    width: "100%",
+                                    height: 400,
+                                    borderRadius: 3,
+                                    overflow: "hidden",
+                                    backgroundColor: "#1a1a1a",
+                                }}
+                            >
+                                {selectedCategory.imageUrl && (
+                                    <img
+                                        src={getImageUrl(selectedCategory.imageUrl)}
+                                        alt={selectedCategory.categoryName}
+                                        style={{
+                                            width: "100%",
+                                            height: "100%",
+                                            objectFit: "cover",
+                                        }}
+                                    />
+                                )}
+                            </Box>
+                        </Grid>
+
+                        {/* RIGHT - Subcategories */}
+                        <Grid item xs={7} sx={{ pl: 4 }}>
+                            <Typography
+                                variant="h5"
+                                fontWeight="bold"
+                                sx={{
+                                    mb: 3,
+                                    letterSpacing: 2,
+                                    textTransform: "uppercase",
+                                }}
+                            >
+                                {selectedCategory.categoryName}
+                            </Typography>
+
+                            <Grid container spacing={2}>
+                                {getSubCategoriesForCategory(selectedCategory.categoryId).map((sub) => (
+                                    <Grid item xs={6} key={sub.subCategoryId}>
+                                        <Typography
+                                            onClick={() => handleSubCategoryClick(sub.subCategoryId)}
+                                            sx={{
+                                                color: "#fff",
+                                                fontSize: 14,
+                                                cursor: "pointer",
+                                                textTransform: "uppercase",
+                                                letterSpacing: 1,
+                                                py: 1,
+                                                transition: "all 0.2s",
+                                                "&:hover": {
+                                                    color: "#ccc",
+                                                    transform: "translateX(5px)",
+                                                },
+                                            }}
+                                        >
+                                            {sub.subCategoryName}
+                                        </Typography>
+                                    </Grid>
+                                ))}
+                            </Grid>
+                        </Grid>
+                    </Grid>
+                )}
+            </Popover>
 
             {/* MOBILE DRAWER */}
             <Drawer

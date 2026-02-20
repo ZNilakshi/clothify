@@ -6,6 +6,9 @@ import ProductDetails from "./pages/ProductDetails";
 import Cart from "./pages/Cart";
 import AdminDashboard from "./pages/AdminDashboard";
 import authService from "./services/authService";
+import CategoryProducts from "./pages/CategoryProducts";
+import SubCategoryProducts from "./pages/SubCategoryProducts";
+import Checkout from "./pages/Checkout";
 
 const ProtectedRoute = ({ children, adminOnly = false }) => {
     const user = authService.getCurrentUser();
@@ -30,7 +33,11 @@ function App() {
                 <Route path="/" element={<Home />} />
                 <Route path="/product/:id" element={<ProductDetails />} />
                 <Route path="/cart" element={<Cart />} />
-                <Route
+                <Route path="/category/:categoryId" element={<CategoryProducts />} />
+                <Route path="/subcategory/:subCategoryId" element={<SubCategoryProducts />} />
+                <Route path="/checkout" element={<Checkout />} />
+
+<Route
                     path="/admin/dashboard"
                     element={
                         <ProtectedRoute adminOnly={true}>

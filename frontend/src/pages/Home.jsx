@@ -73,22 +73,9 @@ const Home = () => {
         setSnackbar({ ...snackbar, open: false });
     };
 
+    // Updated to count all variants of a product
     const getCartQuantity = (productId) => {
-        const item = cart.find((p) => p.productId === productId);
-        return item ? item.quantity : 0;
-    };
-
-    const handleAddToCart = (product, e) => {
-        e.stopPropagation();
-
-        if (product.stockQuantity <= 0) {
-            showSnackbar("Product is out of stock", "error");
-            return;
-        }
-
-        cartService.addToCart(product, 1);
-        updateCart();
-        showSnackbar(`${product.productName} added to cart`);
+        return cartService.getProductTotalQuantity(productId);
     };
 
     const handleProductClick = (id) => {
@@ -126,8 +113,6 @@ const Home = () => {
             </Box>
 
             <Container maxWidth="xxl" sx={{ mt: 1, mb: 1 }}>
-              
-
                 {loading ? (
                     <Typography>Loading...</Typography>
                 ) : (
@@ -146,7 +131,6 @@ const Home = () => {
                             products={products}
                             getImageUrl={getImageUrl}
                             handleProductClick={handleProductClick}
-                            handleAddToCart={handleAddToCart}
                             getCartQuantity={getCartQuantity}
                         />
                     </>
