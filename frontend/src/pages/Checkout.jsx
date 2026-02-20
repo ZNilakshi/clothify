@@ -518,7 +518,6 @@ const Checkout = () => {
                                 </Box>
                             </Box>
 
-                            {/* Payment Methods */}
                             <PaymentOption label="CASH ON DELIVERY"
                                 active={payment.cod} onToggle={() => togglePayment("cod")} />
                             <PaymentOption label="BANK TRANSFER"
