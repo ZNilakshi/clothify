@@ -37,7 +37,7 @@ public class UserAccount extends BaseEntity {
     private Boolean isActive = true;
 
     // Many Users → One Role
-    @ManyToOne(fetch = FetchType.LAZY)
+    @ManyToOne(fetch = FetchType.EAGER)
     @JoinColumn(name = "role_id", nullable = false,
             foreignKey = @ForeignKey(name = "fk_user_role"))
     private Role role;

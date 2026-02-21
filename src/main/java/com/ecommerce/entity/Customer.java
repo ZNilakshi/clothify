@@ -23,29 +23,38 @@ public class Customer extends BaseEntity {
     private Long customerId;
 
     @NotBlank(message = "Customer name is required")
-    @Column(name = "customer_name", nullable = false, length = 100)
+    @Column(name = "customer_name", nullable = false)
     private String customerName;
 
     @Email(message = "Invalid email format")
     @NotBlank(message = "Email is required")
-    @Column(name = "email", unique = true, nullable = false, length = 100)
+    @Column(name = "email", nullable = false, unique = true)
     private String email;
 
-    @Column(name = "phone_number", length = 20)
-    private String phoneNumber;
+    @NotBlank(message = "Phone number is required")
+    @Column(name = "phone_number", nullable = false)  // ← phoneNumber
+    private String phoneNumber;  // ← phoneNumber not phone
+
+    @Column(name = "address")
+    private String address;
+
+    @Column(name = "city")
+    private String city;
+
+    @Column(name = "postal_code")
+    private String postalCode;
 
     // One Customer → One UserAccount
-    @OneToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "user_id", foreignKey = @ForeignKey(name = "fk_customer_user"))
+    @OneToOne
+    @JoinColumn(name = "user_account_id")
     private UserAccount userAccount;
+
+    // One Customer → One Cart
+    @OneToOne(mappedBy = "customer", cascade = CascadeType.ALL, orphanRemoval = true)
+    private Cart cart;
 
     // One Customer → Many Orders
     @OneToMany(mappedBy = "customer", cascade = CascadeType.ALL)
     @Builder.Default
     private Set<Order> orders = new HashSet<>();
-
-    // One Customer → One Cart
-    @OneToOne(mappedBy = "customer", cascade = CascadeType.ALL,
-            orphanRemoval = true)
-    private Cart cart;
 }

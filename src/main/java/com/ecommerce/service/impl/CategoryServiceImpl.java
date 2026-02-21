@@ -61,6 +61,7 @@ public class CategoryServiceImpl implements CategoryService {
 
         category.setCategoryName(dto.getCategoryName());
         category.setCategoryDescription(dto.getCategoryDescription());
+        category.setImageUrl(dto.getImageUrl());   // ← FIXED
 
         return categoryMapper.toDTO(categoryRepository.save(category));
     }

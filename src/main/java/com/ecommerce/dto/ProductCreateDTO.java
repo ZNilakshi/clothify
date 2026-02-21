@@ -9,6 +9,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 @Data
 @Builder
@@ -20,18 +21,28 @@ public class ProductCreateDTO {
     private String productName;
 
     private String productDescription;
+    private String sku;
 
     @NotNull(message = "Price is required")
     @Positive(message = "Price must be positive")
     private BigDecimal price;
 
-    @NotNull(message = "Category ID is required")
+    private BigDecimal unitPrice;
+    private BigDecimal sellingPrice;
+    private BigDecimal margin;
+    private BigDecimal discount;
+    private BigDecimal discountPrice;
+
+    @NotNull(message = "Category is required")
     private Long categoryId;
 
-    @Positive(message = "Initial stock must be positive")
+    private Long subCategoryId;
+
     private Integer initialStock;
-
     private Integer reorderLevel;
-
     private String unitOfMeasure;
+
+    private String imageUrl;
+    private List<String> imageUrls;
+    private List<ProductVariantDTO> variants;
 }

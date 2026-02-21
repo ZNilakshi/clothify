@@ -8,7 +8,9 @@ import com.ecommerce.exception.InsufficientStockException;
 import com.ecommerce.exception.ResourceNotFoundException;
 import com.ecommerce.mapper.OrderMapper;
 import com.ecommerce.repository.*;
+import com.ecommerce.service.EmailService;
 import com.ecommerce.service.OrderService;
+import com.ecommerce.service.SmsService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -33,6 +35,8 @@ public class OrderServiceImpl implements OrderService {
     private final CityRepository cityRepository;
     private final InventoryRepository inventoryRepository;
     private final OrderMapper orderMapper;
+    private final EmailService emailService;
+    private final SmsService smsService;
 
     @Override
     public OrderDTO checkout(CheckoutDTO checkoutDTO) {
@@ -51,14 +55,14 @@ public class OrderServiceImpl implements OrderService {
             throw new BusinessException("Cannot checkout with empty cart");
         }
 
-        // 4. Validate city exists (optional)
+        // 4. Validate city (optional)
         City city = null;
         if (checkoutDTO.getCityId() != null) {
             city = cityRepository.findById(checkoutDTO.getCityId())
                     .orElseThrow(() -> new ResourceNotFoundException("City", "id", checkoutDTO.getCityId()));
         }
 
-        // 5. Validate stock availability and calculate total
+        // 5. Validate stock & calculate total
         BigDecimal totalAmount = BigDecimal.ZERO;
         Set<OrderItem> orderItems = new HashSet<>();
 
@@ -66,7 +70,6 @@ public class OrderServiceImpl implements OrderService {
             Product product = cartItem.getProduct();
             Inventory inventory = product.getInventory();
 
-            // Check stock
             if (inventory == null || inventory.getQuantityInStock() < cartItem.getQuantity()) {
                 throw new InsufficientStockException(
                         product.getProductName(),
@@ -75,19 +78,28 @@ public class OrderServiceImpl implements OrderService {
                 );
             }
 
-            // Calculate line total
-            BigDecimal lineTotal = product.getPrice().multiply(BigDecimal.valueOf(cartItem.getQuantity()));
+            // Use discounted price if available
+            BigDecimal unitPrice = product.getDiscountPrice() != null && product.getDiscountPrice().compareTo(BigDecimal.ZERO) > 0
+                    ? product.getDiscountPrice()
+                    : product.getSellingPrice();
+
+            BigDecimal lineTotal = unitPrice.multiply(BigDecimal.valueOf(cartItem.getQuantity()));
             totalAmount = totalAmount.add(lineTotal);
 
-            // Create order item (will be linked to order later)
             OrderItem orderItem = OrderItem.builder()
                     .product(product)
                     .quantity(cartItem.getQuantity())
-                    .unitPrice(product.getPrice())
+                    .unitPrice(unitPrice)
                     .lineTotal(lineTotal)
                     .build();
 
             orderItems.add(orderItem);
+        }
+
+        // Add shipping cost if delivery
+        if ("delivery".equalsIgnoreCase(checkoutDTO.getDeliveryMethod())) {
+            BigDecimal shippingCost = new BigDecimal("350.00");
+            totalAmount = totalAmount.add(shippingCost);
         }
 
         // 6. Create order
@@ -100,42 +112,57 @@ public class OrderServiceImpl implements OrderService {
                 .orderItems(orderItems)
                 .build();
 
-        // Link order items to order (bidirectional)
         orderItems.forEach(item -> item.setOrder(order));
 
-        // 7. Create payment record
+        // 7. Create payment
         Payment payment = Payment.builder()
                 .order(order)
                 .paymentMethod(checkoutDTO.getPaymentMethod())
                 .paymentStatus("PENDING")
                 .build();
-
         order.setPayment(payment);
 
-        // 8. Create sale transaction
+        // 8. Create sale
         Sale sale = Sale.builder()
                 .order(order)
                 .transactionDate(LocalDateTime.now())
                 .build();
-
         order.setSale(sale);
 
         // 9. Reduce inventory
         for (CartItem cartItem : cart.getCartItems()) {
             Inventory inventory = cartItem.getProduct().getInventory();
-            inventory.setQuantityInStock(inventory.getQuantityInStock() - cartItem.getQuantity());
+            inventory.setQuantityInStock(
+                    inventory.getQuantityInStock() - cartItem.getQuantity()
+            );
             inventoryRepository.save(inventory);
         }
 
-        // 10. Save order (cascades to order items, payment, and sale)
+        // 10. Save order
         Order savedOrder = orderRepository.save(order);
 
-        // 11. Clear cart
+        // 11. Send notifications
+        try {
+            // Send email to customer
+            emailService.sendOrderConfirmationToCustomer(savedOrder, checkoutDTO.getEmail());
+
+            // Send email to admin
+            emailService.sendOrderNotificationToAdmin(savedOrder);
+
+            // Send SMS to customer
+            smsService.sendOrderConfirmationSms(savedOrder, checkoutDTO.getPhone());
+
+            log.info("All notifications sent successfully for order: {}", savedOrder.getOrderId());
+        } catch (Exception e) {
+            log.error("Error sending notifications for order: {}", savedOrder.getOrderId(), e);
+            // Don't fail the order if notifications fail
+        }
+
+        // 12. Clear cart
         cart.getCartItems().clear();
         cartRepository.save(cart);
 
         log.info("Order created successfully: {}", savedOrder.getOrderId());
-
         return orderMapper.toDTO(savedOrder);
     }
 
@@ -150,7 +177,6 @@ public class OrderServiceImpl implements OrderService {
     @Override
     @Transactional(readOnly = true)
     public List<OrderDTO> getCustomerOrders(Long customerId) {
-        // Validate customer exists
         if (!customerRepository.existsById(customerId)) {
             throw new ResourceNotFoundException("Customer", "id", customerId);
         }
@@ -170,23 +196,31 @@ public class OrderServiceImpl implements OrderService {
 
     @Override
     public OrderDTO updateOrderStatus(Long orderId, String status) {
-        log.info("Updating order {} status to: {}", orderId, status);
+        log.info("Updating order {} status to {}", orderId, status);
 
         Order order = orderRepository.findById(orderId)
                 .orElseThrow(() -> new ResourceNotFoundException("Order", "id", orderId));
 
-        // Validate status transition
         validateStatusTransition(order.getOrderStatus(), status);
 
+        String oldStatus = order.getOrderStatus();
         order.setOrderStatus(status);
 
-        // If order is completed, mark payment as completed
         if ("COMPLETED".equals(status) && order.getPayment() != null) {
             order.getPayment().setPaymentStatus("COMPLETED");
             order.getPayment().setPaymentDate(LocalDateTime.now());
         }
 
         Order updated = orderRepository.save(order);
+
+        // Send notifications
+        try {
+            emailService.sendOrderStatusUpdate(updated, oldStatus, status);
+            smsService.sendOrderStatusUpdateSms(updated, updated.getCustomer().getPhoneNumber(), status);
+        } catch (Exception e) {
+            log.error("Error sending status update notifications", e);
+        }
+
         return orderMapper.toDTO(updated);
     }
 
@@ -197,15 +231,19 @@ public class OrderServiceImpl implements OrderService {
         Order order = orderRepository.findById(orderId)
                 .orElseThrow(() -> new ResourceNotFoundException("Order", "id", orderId));
 
-        // Can only cancel pending or processing orders
-        if ("COMPLETED".equals(order.getOrderStatus()) || "CANCELLED".equals(order.getOrderStatus())) {
-            throw new BusinessException("Cannot cancel order with status: " + order.getOrderStatus());
+        if ("COMPLETED".equals(order.getOrderStatus()) ||
+                "CANCELLED".equals(order.getOrderStatus())) {
+            throw new BusinessException(
+                    "Cannot cancel order with status: " + order.getOrderStatus()
+            );
         }
 
         // Restore inventory
         for (OrderItem item : order.getOrderItems()) {
             Inventory inventory = item.getProduct().getInventory();
-            inventory.setQuantityInStock(inventory.getQuantityInStock() + item.getQuantity());
+            inventory.setQuantityInStock(
+                    inventory.getQuantityInStock() + item.getQuantity()
+            );
             inventoryRepository.save(inventory);
         }
 
@@ -221,7 +259,7 @@ public class OrderServiceImpl implements OrderService {
 
     @Override
     public OrderDTO processPayment(Long orderId) {
-        log.info("Processing payment for order: {}", orderId);
+        log.info("Processing payment for order {}", orderId);
 
         Order order = orderRepository.findById(orderId)
                 .orElseThrow(() -> new ResourceNotFoundException("Order", "id", orderId));
@@ -230,7 +268,6 @@ public class OrderServiceImpl implements OrderService {
             throw new BusinessException("No payment record found for order");
         }
 
-        // Simulate payment processing
         Payment payment = order.getPayment();
         payment.setPaymentStatus("COMPLETED");
         payment.setPaymentDate(LocalDateTime.now());
@@ -242,15 +279,11 @@ public class OrderServiceImpl implements OrderService {
     }
 
     private void validateStatusTransition(String currentStatus, String newStatus) {
-        // Define valid transitions
         if ("CANCELLED".equals(currentStatus)) {
             throw new BusinessException("Cannot change status of cancelled order");
         }
-
         if ("COMPLETED".equals(currentStatus)) {
             throw new BusinessException("Cannot change status of completed order");
         }
-
-        // Add more business rules as needed
     }
 }

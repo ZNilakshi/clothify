@@ -14,11 +14,13 @@ import com.ecommerce.repository.CustomerRepository;
 import com.ecommerce.repository.RoleRepository;
 import com.ecommerce.repository.UserAccountRepository;
 import com.ecommerce.service.CustomerService;
+import com.ecommerce.service.EmailService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -34,6 +36,7 @@ public class CustomerServiceImpl implements CustomerService {
     private final CartRepository cartRepository;
     private final CustomerMapper customerMapper;
     private final PasswordEncoder passwordEncoder;
+    private final EmailService emailService;
 
     @Override
     public CustomerDTO registerCustomer(CustomerCreateDTO dto) {
@@ -56,7 +59,7 @@ public class CustomerServiceImpl implements CustomerService {
                                 .build()
                 ));
 
-        // Create UserAccount FIRST
+        // Create UserAccount
         UserAccount userAccount = UserAccount.builder()
                 .username(dto.getUsername())
                 .passwordHash(passwordEncoder.encode(dto.getPassword()))
@@ -64,7 +67,7 @@ public class CustomerServiceImpl implements CustomerService {
                 .role(customerRole)
                 .build();
 
-        // Save UserAccount first - THIS IS THE FIX
+        // Save UserAccount first
         UserAccount savedUserAccount = userAccountRepository.save(userAccount);
 
         // Create Customer
@@ -72,29 +75,41 @@ public class CustomerServiceImpl implements CustomerService {
                 .customerName(dto.getCustomerName())
                 .email(dto.getEmail())
                 .phoneNumber(dto.getPhoneNumber())
-                .userAccount(savedUserAccount)  // Use the saved user account
+                .userAccount(savedUserAccount)
                 .build();
 
         // Set bidirectional relationship
         savedUserAccount.setCustomer(customer);
 
-        // Create empty Cart
+        // Create Cart
         Cart cart = Cart.builder()
                 .customer(customer)
                 .build();
         customer.setCart(cart);
 
-        // Save Customer (cascades to Cart)
-        Customer saved = customerRepository.save(customer);
+        // Save Customer
+        Customer savedCustomer = customerRepository.save(customer);
 
-        return customerMapper.toDTO(saved);
+        // Send welcome email
+        try {
+            emailService.sendWelcomeEmail(
+                    savedCustomer.getEmail(),
+                    savedCustomer.getCustomerName()
+            );
+        } catch (Exception e) {
+            log.error("Failed to send welcome email", e);
+        }
+
+        return customerMapper.toDTO(savedCustomer);
     }
 
     @Override
     @Transactional(readOnly = true)
     public CustomerDTO getCustomerById(Long id) {
         Customer customer = customerRepository.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("Customer", "id", id));
+                .orElseThrow(() ->
+                        new ResourceNotFoundException("Customer", "id", id)
+                );
         return customerMapper.toDTO(customer);
     }
 
@@ -102,14 +117,17 @@ public class CustomerServiceImpl implements CustomerService {
     @Transactional(readOnly = true)
     public CustomerDTO getCustomerByEmail(String email) {
         Customer customer = customerRepository.findByEmail(email)
-                .orElseThrow(() -> new ResourceNotFoundException("Customer", "email", email));
+                .orElseThrow(() ->
+                        new ResourceNotFoundException("Customer", "email", email)
+                );
         return customerMapper.toDTO(customer);
     }
 
     @Override
     @Transactional(readOnly = true)
     public List<CustomerDTO> getAllCustomers() {
-        return customerRepository.findAll().stream()
+        return customerRepository.findAll()
+                .stream()
                 .map(customerMapper::toDTO)
                 .collect(Collectors.toList());
     }
@@ -117,7 +135,9 @@ public class CustomerServiceImpl implements CustomerService {
     @Override
     public void deleteCustomer(Long id) {
         Customer customer = customerRepository.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("Customer", "id", id));
+                .orElseThrow(() ->
+                        new ResourceNotFoundException("Customer", "id", id)
+                );
         customerRepository.delete(customer);
     }
 }

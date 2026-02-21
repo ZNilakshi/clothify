@@ -5,13 +5,17 @@ import com.ecommerce.dto.ProductDTO;
 import com.ecommerce.dto.ProductUpdateDTO;
 import com.ecommerce.entity.Category;
 import com.ecommerce.entity.Product;
+import com.ecommerce.entity.SubCategory;
 import com.ecommerce.exception.ResourceNotFoundException;
 import com.ecommerce.mapper.ProductMapper;
 import com.ecommerce.repository.CategoryRepository;
 import com.ecommerce.repository.ProductRepository;
+import com.ecommerce.repository.SubCategoryRepository;
 import com.ecommerce.service.ProductService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -19,165 +23,150 @@ import java.math.BigDecimal;
 import java.util.List;
 import java.util.stream.Collectors;
 
-@Service  // Marks this as a service component
-@RequiredArgsConstructor  // Lombok: generates constructor for final fields
-@Slf4j  // Lombok: generates logger
-@Transactional  // All methods run in transactions
+@Service
+@RequiredArgsConstructor
+@Slf4j
+@Transactional
 public class ProductServiceImpl implements ProductService {
 
-    private final ProductRepository productRepository;
-    private final CategoryRepository categoryRepository;
-    private final ProductMapper productMapper;
+    private final ProductRepository     productRepository;
+    private final CategoryRepository    categoryRepository;
+    private final SubCategoryRepository subCategoryRepository;
+    private final ProductMapper         productMapper;
 
     @Override
-    public ProductDTO createProduct(ProductCreateDTO productCreateDTO) {
-        log.info("Creating new product: {}", productCreateDTO.getProductName());
+    public ProductDTO createProduct(ProductCreateDTO dto) {
+        log.info("Creating product: {}", dto.getProductName());
 
-        // Validate category exists
-        Category category = categoryRepository.findById(productCreateDTO.getCategoryId())
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        "Category", "id", productCreateDTO.getCategoryId()));
+        Category category = categoryRepository.findById(dto.getCategoryId())
+                .orElseThrow(() -> new ResourceNotFoundException("Category", "id", dto.getCategoryId()));
 
-        // Convert DTO to Entity
-        Product product = productMapper.toEntity(productCreateDTO, category);
-
-        // Save to database
-        Product savedProduct = productRepository.save(product);
-
-        log.info("Product created successfully with ID: {}", savedProduct.getProductId());
-
-        // Convert Entity back to DTO and return
-        return productMapper.toDTO(savedProduct);
-    }
-
-    @Override
-    public ProductDTO updateProduct(Long id, ProductUpdateDTO productUpdateDTO) {
-        log.info("Updating product with ID: {}", id);
-
-        // Find existing product
-        Product product = productRepository.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("Product", "id", id));
-
-        // If category is being updated, validate it exists
-        Category category = null;
-        if (productUpdateDTO.getCategoryId() != null) {
-            category = categoryRepository.findById(productUpdateDTO.getCategoryId())
-                    .orElseThrow(() -> new ResourceNotFoundException(
-                            "Category", "id", productUpdateDTO.getCategoryId()));
+        SubCategory subCategory = null;
+        if (dto.getSubCategoryId() != null) {
+            subCategory = subCategoryRepository.findById(dto.getSubCategoryId())
+                    .orElseThrow(() -> new ResourceNotFoundException("SubCategory", "id", dto.getSubCategoryId()));
         }
 
-        // Update entity from DTO
-        productMapper.updateEntityFromDTO(product, productUpdateDTO, category);
+        Product product = productMapper.toEntity(dto, category, subCategory);
 
-        // Save changes
-        Product updatedProduct = productRepository.save(product);
+        // If variants provided, calculate total stock
+        if (dto.getVariants() != null && !dto.getVariants().isEmpty()) {
+            int totalStock = dto.getVariants().stream()
+                    .mapToInt(v -> v.getQuantity() != null ? v.getQuantity() : 0)
+                    .sum();
+            if (product.getInventory() != null) {
+                product.getInventory().setQuantityInStock(totalStock);
+            }
+        }
 
-        log.info("Product updated successfully: {}", id);
-
-        return productMapper.toDTO(updatedProduct);
+        Product saved = productRepository.save(product);
+        log.info("Product created with ID: {}", saved.getProductId());
+        return productMapper.toDTO(saved);
     }
 
     @Override
-    @Transactional(readOnly = true)  // Optimization for read-only operations
-    public ProductDTO getProductById(Long id) {
-        log.debug("Fetching product with ID: {}", id);
+    public ProductDTO updateProduct(Long id, ProductUpdateDTO dto) {
+        log.info("Updating product: {}", id);
 
         Product product = productRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Product", "id", id));
 
-        return productMapper.toDTO(product);
+        Category category = null;
+        if (dto.getCategoryId() != null) {
+            category = categoryRepository.findById(dto.getCategoryId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Category", "id", dto.getCategoryId()));
+        }
+
+        SubCategory subCategory = null;
+        if (dto.getSubCategoryId() != null) {
+            subCategory = subCategoryRepository.findById(dto.getSubCategoryId())
+                    .orElseThrow(() -> new ResourceNotFoundException("SubCategory", "id", dto.getSubCategoryId()));
+        }
+
+        productMapper.updateEntityFromDTO(product, dto, category, subCategory);
+
+        Product updated = productRepository.save(product);
+        log.info("Product updated: {}", id);
+        return productMapper.toDTO(updated);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ProductDTO getProductById(Long id) {
+        return productMapper.toDTO(productRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Product", "id", id)));
     }
 
     @Override
     @Transactional(readOnly = true)
     public List<ProductDTO> getAllProducts() {
-        log.debug("Fetching all products");
-
         return productRepository.findAll().stream()
-                .map(productMapper::toDTO)
-                .collect(Collectors.toList());
+                .map(productMapper::toDTO).collect(Collectors.toList());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Page<ProductDTO> getAllProductsPaginated(Pageable pageable) {
+        return productRepository.findAll(pageable).map(productMapper::toDTO);
     }
 
     @Override
     @Transactional(readOnly = true)
     public List<ProductDTO> getActiveProducts() {
-        log.debug("Fetching active products");
-
         return productRepository.findByIsActiveTrue().stream()
-                .map(productMapper::toDTO)
-                .collect(Collectors.toList());
+                .map(productMapper::toDTO).collect(Collectors.toList());
     }
 
     @Override
     @Transactional(readOnly = true)
     public List<ProductDTO> getProductsByCategory(Long categoryId) {
-        log.debug("Fetching products for category ID: {}", categoryId);
-
-        // Validate category exists
-        if (!categoryRepository.existsById(categoryId)) {
+        if (!categoryRepository.existsById(categoryId))
             throw new ResourceNotFoundException("Category", "id", categoryId);
-        }
-
         return productRepository.findByCategoryCategoryId(categoryId).stream()
-                .map(productMapper::toDTO)
-                .collect(Collectors.toList());
+                .map(productMapper::toDTO).collect(Collectors.toList());
     }
 
     @Override
     @Transactional(readOnly = true)
     public List<ProductDTO> searchProducts(String keyword) {
-        log.debug("Searching products with keyword: {}", keyword);
-
         return productRepository.searchActiveProducts(keyword).stream()
-                .map(productMapper::toDTO)
-                .collect(Collectors.toList());
+                .map(productMapper::toDTO).collect(Collectors.toList());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Page<ProductDTO> searchProductsPaginated(String keyword, Pageable pageable) {
+        return productRepository.searchActiveProducts(keyword, pageable).map(productMapper::toDTO);
     }
 
     @Override
     @Transactional(readOnly = true)
     public List<ProductDTO> getProductsByPriceRange(BigDecimal minPrice, BigDecimal maxPrice) {
-        log.debug("Fetching products in price range: {} - {}", minPrice, maxPrice);
-
         return productRepository.findByPriceBetween(minPrice, maxPrice).stream()
-                .map(productMapper::toDTO)
-                .collect(Collectors.toList());
+                .map(productMapper::toDTO).collect(Collectors.toList());
     }
 
     @Override
     public void deleteProduct(Long id) {
-        log.info("Deleting product with ID: {}", id);
-
         Product product = productRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Product", "id", id));
-
         productRepository.delete(product);
-
-        log.info("Product deleted successfully: {}", id);
+        log.info("Product deleted: {}", id);
     }
 
     @Override
     public void activateProduct(Long id) {
-        log.info("Activating product with ID: {}", id);
-
         Product product = productRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Product", "id", id));
-
         product.setIsActive(true);
         productRepository.save(product);
-
-        log.info("Product activated successfully: {}", id);
     }
 
     @Override
     public void deactivateProduct(Long id) {
-        log.info("Deactivating product with ID: {}", id);
-
         Product product = productRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Product", "id", id));
-
         product.setIsActive(false);
         productRepository.save(product);
-
-        log.info("Product deactivated successfully: {}", id);
     }
 }

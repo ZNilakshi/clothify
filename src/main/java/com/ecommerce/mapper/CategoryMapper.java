@@ -15,6 +15,7 @@ public class CategoryMapper {
                 .categoryId(category.getCategoryId())
                 .categoryName(category.getCategoryName())
                 .categoryDescription(category.getCategoryDescription())
+                .imageUrl(category.getImageUrl())
                 .productCount(category.getProducts() != null ? category.getProducts().size() : 0)
                 .createdAt(category.getCreatedAt())
                 .updatedAt(category.getUpdatedAt())
@@ -27,6 +28,7 @@ public class CategoryMapper {
         return Category.builder()
                 .categoryName(dto.getCategoryName())
                 .categoryDescription(dto.getCategoryDescription())
+                .imageUrl(dto.getImageUrl())
                 .build();
     }
 }

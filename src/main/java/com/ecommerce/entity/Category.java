@@ -27,6 +27,8 @@ public class Category extends BaseEntity {
 
     @Column(name = "category_description", columnDefinition = "TEXT")
     private String categoryDescription;
+    @Column(name = "image_url")
+    private String imageUrl;
 
     // One Category → Many Products
     @OneToMany(mappedBy = "category", cascade = CascadeType.ALL)

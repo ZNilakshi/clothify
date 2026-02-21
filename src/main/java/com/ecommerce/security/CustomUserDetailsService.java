@@ -16,18 +16,24 @@ public class CustomUserDetailsService implements UserDetailsService {
     private final UserAccountRepository userAccountRepository;
 
     @Override
-    @Transactional
+    @Transactional(readOnly = true)  // Make sure this is here
     public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
         UserAccount user = userAccountRepository.findByUsername(username)
                 .orElseThrow(() -> new UsernameNotFoundException("User not found: " + username));
 
+        // Force load the role
+        user.getRole().getRoleName();
+
         return UserPrincipal.create(user);
     }
 
-    @Transactional
+    @Transactional(readOnly = true)  // Make sure this is here
     public UserDetails loadUserById(Long userId) {
         UserAccount user = userAccountRepository.findById(userId)
                 .orElseThrow(() -> new UsernameNotFoundException("User not found with id: " + userId));
+
+        // Force load the role
+        user.getRole().getRoleName();
 
         return UserPrincipal.create(user);
     }

@@ -14,4 +14,6 @@ public class CategoryCreateDTO {
     @NotBlank(message = "Category name is required")
     private String categoryName;
     private String categoryDescription;
+    private String imageUrl;
+
 }

@@ -10,6 +10,13 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -80,7 +87,32 @@ public class ProductController {
         ProductDTO createdProduct = productService.createProduct(productCreateDTO);
         return new ResponseEntity<>(createdProduct, HttpStatus.CREATED);
     }
+    @Operation(summary = "Get all products (Paginated)", description = "Retrieve paginated list of products")
+    @GetMapping("/paginated")
+    public ResponseEntity<Page<ProductDTO>> getAllProductsPaginated(
+            @Parameter(description = "Page number (0-indexed)") @RequestParam(defaultValue = "0") int page,
+            @Parameter(description = "Page size") @RequestParam(defaultValue = "10") int size,
+            @Parameter(description = "Sort by field") @RequestParam(defaultValue = "productId") String sortBy,
+            @Parameter(description = "Sort direction (ASC/DESC)") @RequestParam(defaultValue = "ASC") String direction) {
 
+        Sort.Direction sortDirection = "DESC".equalsIgnoreCase(direction) ? Sort.Direction.DESC : Sort.Direction.ASC;
+        Pageable pageable = PageRequest.of(page, size, Sort.by(sortDirection, sortBy));
+
+        Page<ProductDTO> products = productService.getAllProductsPaginated(pageable);
+        return ResponseEntity.ok(products);
+    }
+
+    @Operation(summary = "Search products (Paginated)", description = "Search products with pagination")
+    @GetMapping("/search/paginated")
+    public ResponseEntity<Page<ProductDTO>> searchProductsPaginated(
+            @Parameter(description = "Search keyword") @RequestParam String keyword,
+            @Parameter(description = "Page number") @RequestParam(defaultValue = "0") int page,
+            @Parameter(description = "Page size") @RequestParam(defaultValue = "10") int size) {
+
+        Pageable pageable = PageRequest.of(page, size);
+        Page<ProductDTO> products = productService.searchProductsPaginated(keyword, pageable);
+        return ResponseEntity.ok(products);
+    }
     // PUT /api/products/{id} - Update product
     @PutMapping("/{id}")
     public ResponseEntity<ProductDTO> updateProduct(
