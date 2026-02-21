@@ -7,6 +7,9 @@ import {
     Switch,
     Divider,
     IconButton,
+    Snackbar,
+    Alert,
+    CircularProgress,
 } from "@mui/material";
 import {
     ArrowBackIos,
@@ -20,6 +23,8 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import Navbar from "../components/Navbar";
 import cartService from "../services/cartService";
+import authService from "../services/authService";
+import axios from "axios";
 
 const FLAT_RATE_SHIPPING = 350;
 
@@ -126,13 +131,11 @@ const Checkout = () => {
     const [cart, setCart] = useState([]);
     const [deliveryMethod, setDeliveryMethod] = useState("delivery");
     const [shipTo, setShipTo] = useState("billing");
-    const [createAccount, setCreateAccount] = useState(false);
+    const [loading, setLoading] = useState(false);
     const [payment, setPayment] = useState({
         cod: false,
         bank: false,
         visa: false,
-        koko: false,
-        payzy: false,
     });
     const [form, setForm] = useState({
         firstName: "",
@@ -150,10 +153,27 @@ const Checkout = () => {
         secondaryPhone: "",
         orderNote: "",
     });
+    const [snackbar, setSnackbar] = useState({
+        open: false,
+        message: "",
+        severity: "success",
+    });
 
     useEffect(() => {
+        // Check if user is logged in
+        const user = authService.getCurrentUser();
+        if (!user) {
+            setSnackbar({
+                open: true,
+                message: "Please login to continue checkout",
+                severity: "warning",
+            });
+            setTimeout(() => navigate("/login"), 2000);
+            return;
+        }
+
         setCart(cartService.getCart());
-    }, []);
+    }, [navigate]);
 
     const getImageUrl = (imageUrl) => {
         if (!imageUrl) return null;
@@ -161,6 +181,7 @@ const Checkout = () => {
         return `http://localhost:8080${imageUrl}`;
     };
 
+    
     const getItemPrice = (item) =>
         parseFloat(item.discountPrice || item.sellingPrice || item.price || 0);
 
@@ -178,15 +199,178 @@ const Checkout = () => {
         navigate(`/product/${productId}`);
     };
 
-    const togglePayment = (key) =>
-        setPayment((prev) => ({ ...prev, [key]: !prev[key] }));
+    const togglePayment = (key) => {
+        // Only allow one payment method at a time
+        setPayment({
+            cod: key === "cod",
+            bank: key === "bank",
+            visa: key === "visa",
+        });
+    };
 
     const handleChange = (field) => (e) =>
         setForm((prev) => ({ ...prev, [field]: e.target.value }));
 
-    const handlePlaceOrder = () => {
-        console.log("Order placed:", { form, cart, deliveryMethod, shipTo, payment });
-        alert("Order placed successfully!");
+    const handleCloseSnackbar = () =>
+        setSnackbar({ ...snackbar, open: false });
+
+    const validateForm = () => {
+        // Check required fields
+        if (!form.firstName || !form.lastName) {
+            setSnackbar({
+                open: true,
+                message: "Please enter your first and last name",
+                severity: "error",
+            });
+            return false;
+        }
+
+        if (!form.email || !form.phone) {
+            setSnackbar({
+                open: true,
+                message: "Please enter your email and phone number",
+                severity: "error",
+            });
+            return false;
+        }
+
+        // Validate email format
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(form.email)) {
+            setSnackbar({
+                open: true,
+                message: "Please enter a valid email address",
+                severity: "error",
+            });
+            return false;
+        }
+
+        // Check delivery address if delivery method selected
+        if (deliveryMethod === "delivery") {
+            if (!form.street || !form.city || !form.postal) {
+                setSnackbar({
+                    open: true,
+                    message: "Please enter complete delivery address",
+                    severity: "error",
+                });
+                return false;
+            }
+        }
+
+        // Check payment method selected
+        if (!payment.cod && !payment.bank && !payment.visa) {
+            setSnackbar({
+                open: true,
+                message: "Please select a payment method",
+                severity: "error",
+            });
+            return false;
+        }
+
+        // Check cart is not empty
+        if (cart.length === 0) {
+            setSnackbar({
+                open: true,
+                message: "Your cart is empty",
+                severity: "error",
+            });
+            return false;
+        }
+
+        return true;
+    };
+
+    const handlePlaceOrder = async () => {
+        if (!validateForm()) return;
+
+        const user = authService.getCurrentUser();
+        if (!user || !user.customerId) {
+            setSnackbar({
+                open: true,
+                message: "Please login to place an order",
+                severity: "error",
+            });
+            setTimeout(() => navigate("/login"), 2000);
+            return;
+        }
+
+        setLoading(true);
+
+        try {
+            // Determine payment method
+            let paymentMethod = "COD";
+            if (payment.cod) paymentMethod = "COD";
+            else if (payment.bank) paymentMethod = "BANK_TRANSFER";
+            else if (payment.visa) paymentMethod = "CARD";
+
+            // Prepare checkout data
+            const checkoutData = {
+                customerId: user.customerId,
+                firstName: form.firstName,
+                lastName: form.lastName,
+                email: form.email,
+                phoneNumber: form.phone,
+                secondaryPhone: form.secondaryPhone || null,
+                deliveryMethod: deliveryMethod,
+                street: form.street || null,
+                apartment: form.apartment || null,
+                city: form.city || null,
+                postal: form.postal || null,
+                shipTo: shipTo,
+                diffStreet: shipTo === "different" ? form.diffStreet : null,
+                diffApartment: shipTo === "different" ? form.diffApartment : null,
+                diffCity: shipTo === "different" ? form.diffCity : null,
+                diffPostal: shipTo === "different" ? form.diffPostal : null,
+                paymentMethod: paymentMethod,
+                orderNote: form.orderNote || null,
+                cityId: null, // Optional: add city selection
+            };
+
+            console.log("Sending checkout data:", checkoutData);
+
+            // Send to backend
+            const response = await axios.post(
+                "http://localhost:8080/api/orders/checkout",
+                checkoutData
+            );
+
+            console.log("Order response:", response.data);
+
+            // Clear cart
+            cartService.clearCart();
+            window.dispatchEvent(new Event("cartUpdated"));
+
+            // Show success message
+            setSnackbar({
+                open: true,
+                message: `Order placed successfully! Order #${response.data.orderId}`,
+                severity: "success",
+            });
+
+            // Redirect to order confirmation or orders page
+            setTimeout(() => {
+                navigate(`/orders/${response.data.orderId}`);
+            }, 2000);
+
+        } catch (error) {
+            console.error("Checkout error:", error);
+            
+            let errorMessage = "Failed to place order. Please try again.";
+            
+            if (error.response) {
+                errorMessage = error.response.data.message || 
+                              error.response.data.error || 
+                              errorMessage;
+            }
+
+            setSnackbar({
+                open: true,
+                message: errorMessage,
+                severity: "error",
+            });
+        } finally {
+            setLoading(false);
+        }
     };
 
     return (
@@ -213,7 +397,7 @@ const Checkout = () => {
                     BACK TO CART
                 </Button>
 
-                {/* ── OUTER LAYOUT: plain flexbox, no MUI Grid ── */}
+                {/* ── OUTER LAYOUT ── */}
                 <Box sx={{
                     display: "flex",
                     gap: 3,
@@ -235,10 +419,24 @@ const Checkout = () => {
 
                             {/* First name / Last name */}
                             <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 2 }}>
-                                <TextField fullWidth placeholder="First Name*" size="small"
-                                    value={form.firstName} onChange={handleChange("firstName")} sx={inputSx} />
-                                <TextField fullWidth placeholder="Last Name*" size="small"
-                                    value={form.lastName} onChange={handleChange("lastName")} sx={inputSx} />
+                                <TextField 
+                                    fullWidth 
+                                    placeholder="First Name*" 
+                                    size="small"
+                                    required
+                                    value={form.firstName} 
+                                    onChange={handleChange("firstName")} 
+                                    sx={inputSx} 
+                                />
+                                <TextField 
+                                    fullWidth 
+                                    placeholder="Last Name*" 
+                                    size="small"
+                                    required
+                                    value={form.lastName} 
+                                    onChange={handleChange("lastName")} 
+                                    sx={inputSx} 
+                                />
                             </Box>
 
                             {/* Delivery / Pickup toggle */}
@@ -264,14 +462,41 @@ const Checkout = () => {
                                 <>
                                     <SectionTitle>ADDRESS</SectionTitle>
                                     <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 2 }}>
-                                        <TextField fullWidth placeholder="Street address*" size="small"
-                                            value={form.street} onChange={handleChange("street")} sx={inputSx} />
-                                        <TextField fullWidth placeholder="Apartment, suite, unit, etc. (optional)" size="small"
-                                            value={form.apartment} onChange={handleChange("apartment")} sx={inputSx} />
-                                        <TextField fullWidth placeholder="Town / City*" size="small"
-                                            value={form.city} onChange={handleChange("city")} sx={inputSx} />
-                                        <TextField fullWidth placeholder="Postal Code*" size="small"
-                                            value={form.postal} onChange={handleChange("postal")} sx={inputSx} />
+                                        <TextField 
+                                            fullWidth 
+                                            placeholder="Street address*" 
+                                            size="small"
+                                            required
+                                            value={form.street} 
+                                            onChange={handleChange("street")} 
+                                            sx={inputSx} 
+                                        />
+                                        <TextField 
+                                            fullWidth 
+                                            placeholder="Apartment, suite, unit, etc. (optional)" 
+                                            size="small"
+                                            value={form.apartment} 
+                                            onChange={handleChange("apartment")} 
+                                            sx={inputSx} 
+                                        />
+                                        <TextField 
+                                            fullWidth 
+                                            placeholder="Town / City*" 
+                                            size="small"
+                                            required
+                                            value={form.city} 
+                                            onChange={handleChange("city")} 
+                                            sx={inputSx} 
+                                        />
+                                        <TextField 
+                                            fullWidth 
+                                            placeholder="Postal Code*" 
+                                            size="small"
+                                            required
+                                            value={form.postal} 
+                                            onChange={handleChange("postal")} 
+                                            sx={inputSx} 
+                                        />
                                     </Box>
                                     <Typography variant="caption" sx={{ display: "block", mt: 1.5, color: "#555" }}>
                                         <strong>Sri Lanka</strong> –{" "}
@@ -283,28 +508,32 @@ const Checkout = () => {
                             {/* Contact Information */}
                             <SectionTitle>CONTACT INFORMATION</SectionTitle>
                             <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 2 }}>
-                                <TextField fullWidth placeholder="Email address*" size="small"
-                                    value={form.email} onChange={handleChange("email")} sx={inputSx} />
-                                <TextField fullWidth placeholder="Phone*" size="small"
-                                    value={form.phone} onChange={handleChange("phone")} sx={inputSx} />
-                                <TextField placeholder="Secondary Phone (optional)" size="small"
-                                    value={form.secondaryPhone} onChange={handleChange("secondaryPhone")} sx={inputSx} />
-                            </Box>
-
-                            {/* Create account */}
-                            <Box sx={{ display: "flex", alignItems: "center", mt: 2.5 }}>
-                                <Switch
+                                <TextField 
+                                    fullWidth 
+                                    placeholder="Email address*" 
                                     size="small"
-                                    checked={createAccount}
-                                    onChange={() => setCreateAccount(!createAccount)}
-                                    sx={{
-                                        "& .MuiSwitch-switchBase.Mui-checked": { color: "#111" },
-                                        "& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track": { backgroundColor: "#555" },
-                                    }}
+                                    type="email"
+                                    required
+                                    value={form.email} 
+                                    onChange={handleChange("email")} 
+                                    sx={inputSx} 
                                 />
-                                <Typography variant="body2" color="text.secondary" sx={{ ml: 1, fontSize: 13 }}>
-                                    Create new account
-                                </Typography>
+                                <TextField 
+                                    fullWidth 
+                                    placeholder="Phone*" 
+                                    size="small"
+                                    required
+                                    value={form.phone} 
+                                    onChange={handleChange("phone")} 
+                                    sx={inputSx} 
+                                />
+                                <TextField 
+                                    placeholder="Secondary Phone (optional)" 
+                                    size="small"
+                                    value={form.secondaryPhone} 
+                                    onChange={handleChange("secondaryPhone")} 
+                                    sx={inputSx} 
+                                />
                             </Box>
 
                             <Divider sx={{ my: 3, borderColor: "#f0f0f0" }} />
@@ -518,6 +747,10 @@ const Checkout = () => {
                                 </Box>
                             </Box>
 
+                            {/* Payment Methods */}
+                            <Typography variant="caption" color="#888" sx={{ display: "block", mb: 1, letterSpacing: 1.5, fontWeight: "bold" }}>
+                                PAYMENT METHOD *
+                            </Typography>
                             <PaymentOption label="CASH ON DELIVERY"
                                 active={payment.cod} onToggle={() => togglePayment("cod")} />
                             <PaymentOption label="BANK TRANSFER"
@@ -540,7 +773,8 @@ const Checkout = () => {
                             <Button
                                 fullWidth
                                 onClick={handlePlaceOrder}
-                                endIcon={<ArrowForwardIos sx={{ fontSize: 13 }} />}
+                                disabled={loading || cart.length === 0}
+                                endIcon={loading ? <CircularProgress size={16} color="inherit" /> : <ArrowForwardIos sx={{ fontSize: 13 }} />}
                                 sx={{
                                     backgroundColor: "#fff",
                                     color: "#000",
@@ -551,15 +785,35 @@ const Checkout = () => {
                                     fontSize: 14,
                                     letterSpacing: 1,
                                     "&:hover": { backgroundColor: "#e8e8e8" },
+                                    "&:disabled": { 
+                                        backgroundColor: "#ccc",
+                                        color: "#666",
+                                    },
                                     transition: "background-color 0.2s",
                                 }}
                             >
-                                PLACE AN ORDER
+                                {loading ? "PROCESSING..." : "PLACE AN ORDER"}
                             </Button>
                         </Box>
                     </Box>
                 </Box>
             </Box>
+
+            {/* Snackbar for notifications */}
+            <Snackbar
+                open={snackbar.open}
+                autoHideDuration={4000}
+                onClose={handleCloseSnackbar}
+                anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+            >
+                <Alert
+                    onClose={handleCloseSnackbar}
+                    severity={snackbar.severity}
+                    sx={{ borderRadius: 2 }}
+                >
+                    {snackbar.message}
+                </Alert>
+            </Snackbar>
         </Box>
     );
 };
