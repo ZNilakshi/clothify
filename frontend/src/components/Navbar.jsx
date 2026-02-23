@@ -45,11 +45,13 @@ const Navbar = () => {
     const [selectedCategory, setSelectedCategory] = useState(null);
 
     useEffect(() => {
-        setUser(authService.getCurrentUser());
+        const currentUser = authService.getCurrentUser();
+        setUser(currentUser);
+        console.log("🧑 Navbar user object:", currentUser); // 👈 ADD THIS
         updateCartCount();
         fetchCategories();
         fetchSubCategories();
-
+    
         window.addEventListener("cartUpdated", updateCartCount);
         return () => window.removeEventListener("cartUpdated", updateCartCount);
     }, []);
@@ -411,46 +413,54 @@ const Navbar = () => {
                                 )}
                             </Box>
                         </Grid>
+{/* RIGHT - Subcategories */}
+<Grid item xs={7} sx={{ pl: 4 }}>
+    <Typography
+        variant="h5"
+        fontWeight="bold"
+        sx={{
+            mb: 3,
+            letterSpacing: 2,
+            textTransform: "uppercase",
+            borderBottom: "1px solid rgba(255,255,255,0.1)",
+            pb: 1,
+        }}
+    >
+        {selectedCategory.categoryName}
+    </Typography>
 
-                        {/* RIGHT - Subcategories */}
-                        <Grid item xs={7} sx={{ pl: 4 }}>
-                            <Typography
-                                variant="h5"
-                                fontWeight="bold"
-                                sx={{
-                                    mb: 3,
-                                    letterSpacing: 2,
-                                    textTransform: "uppercase",
-                                }}
-                            >
-                                {selectedCategory.categoryName}
-                            </Typography>
-
-                            <Grid container spacing={2}>
-                                {getSubCategoriesForCategory(selectedCategory.categoryId).map((sub) => (
-                                    <Grid item xs={6} key={sub.subCategoryId}>
-                                        <Typography
-                                            onClick={() => handleSubCategoryClick(sub.subCategoryId)}
-                                            sx={{
-                                                color: "#fff",
-                                                fontSize: 14,
-                                                cursor: "pointer",
-                                                textTransform: "uppercase",
-                                                letterSpacing: 1,
-                                                py: 1,
-                                                transition: "all 0.2s",
-                                                "&:hover": {
-                                                    color: "#ccc",
-                                                    transform: "translateX(5px)",
-                                                },
-                                            }}
-                                        >
-                                            {sub.subCategoryName}
-                                        </Typography>
-                                    </Grid>
-                                ))}
-                            </Grid>
-                        </Grid>
+    {/* Using CSS Grid instead of MUI Grid for strict column control */}
+    <Box
+        sx={{
+            display: "grid",
+            gridTemplateColumns: "repeat(3, 1fr)", // 👈 This FORCES 3 equal columns
+            gap: 2, // Space between items
+            width: "100%",
+        }}
+    >
+        {getSubCategoriesForCategory(selectedCategory.categoryId).map((sub) => (
+            <Typography
+                key={sub.subCategoryId}
+                onClick={() => handleSubCategoryClick(sub.subCategoryId)}
+                sx={{
+                    color: "#fff",
+                    fontSize: 13,
+                    cursor: "pointer",
+                    textTransform: "uppercase",
+                    letterSpacing: 1,
+                    py: 1,
+                    transition: "all 0.2s",
+                    "&:hover": {
+                        color: "#ccc",
+                        transform: "translateX(5px)",
+                    },
+                }}
+            >
+                {sub.subCategoryName}
+            </Typography>
+        ))}
+    </Box>
+</Grid>
                     </Grid>
                 )}
             </Popover>

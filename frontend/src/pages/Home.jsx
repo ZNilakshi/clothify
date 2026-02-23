@@ -117,10 +117,7 @@ const Home = () => {
                     <Typography>Loading...</Typography>
                 ) : (
                     <>
-                        <CategorySection
-                            categories={categories}
-                            getImageUrl={getImageUrl}
-                        />
+                       
 
                         <SubCategorySection
                             subCategories={subCategories}

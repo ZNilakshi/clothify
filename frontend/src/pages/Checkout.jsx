@@ -1,6 +1,5 @@
 import {
     Box,
-    Grid,
     Typography,
     Button,
     TextField,
@@ -10,6 +9,7 @@ import {
     Snackbar,
     Alert,
     CircularProgress,
+    Avatar,
 } from "@mui/material";
 import {
     ArrowBackIos,
@@ -160,20 +160,22 @@ const Checkout = () => {
     });
 
     useEffect(() => {
-        // Check if user is logged in
-        const user = authService.getCurrentUser();
-        if (!user) {
-            setSnackbar({
-                open: true,
-                message: "Please login to continue checkout",
-                severity: "warning",
-            });
-            setTimeout(() => navigate("/login"), 2000);
-            return;
-        }
-
+        // Load cart
         setCart(cartService.getCart());
-    }, [navigate]);
+        
+        // Pre-fill user details if logged in
+        const user = authService.getCurrentUser();
+        console.log("Logged in user:", user); // Debug
+        
+        if (user) {
+            // Pre-fill form with user details
+            setForm(prev => ({
+                ...prev,
+                firstName: user.username || prev.firstName,
+                email: user.email || prev.email,
+            }));
+        }
+    }, []);
 
     const getImageUrl = (imageUrl) => {
         if (!imageUrl) return null;
@@ -181,7 +183,6 @@ const Checkout = () => {
         return `http://localhost:8080${imageUrl}`;
     };
 
-    
     const getItemPrice = (item) =>
         parseFloat(item.discountPrice || item.sellingPrice || item.price || 0);
 
@@ -200,7 +201,6 @@ const Checkout = () => {
     };
 
     const togglePayment = (key) => {
-        // Only allow one payment method at a time
         setPayment({
             cod: key === "cod",
             bank: key === "bank",
@@ -215,7 +215,6 @@ const Checkout = () => {
         setSnackbar({ ...snackbar, open: false });
 
     const validateForm = () => {
-        // Check required fields
         if (!form.firstName || !form.lastName) {
             setSnackbar({
                 open: true,
@@ -234,7 +233,6 @@ const Checkout = () => {
             return false;
         }
 
-        // Validate email format
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         if (!emailRegex.test(form.email)) {
             setSnackbar({
@@ -245,7 +243,6 @@ const Checkout = () => {
             return false;
         }
 
-        // Check delivery address if delivery method selected
         if (deliveryMethod === "delivery") {
             if (!form.street || !form.city || !form.postal) {
                 setSnackbar({
@@ -257,7 +254,6 @@ const Checkout = () => {
             }
         }
 
-        // Check payment method selected
         if (!payment.cod && !payment.bank && !payment.visa) {
             setSnackbar({
                 open: true,
@@ -267,7 +263,6 @@ const Checkout = () => {
             return false;
         }
 
-        // Check cart is not empty
         if (cart.length === 0) {
             setSnackbar({
                 open: true,
@@ -281,10 +276,12 @@ const Checkout = () => {
     };
 
     const handlePlaceOrder = async () => {
-        if (!validateForm()) return;
-
+        // Check authentication first
         const user = authService.getCurrentUser();
-        if (!user || !user.customerId) {
+        
+        console.log("User when placing order:", user); // Debug
+        
+        if (!user) {
             setSnackbar({
                 open: true,
                 message: "Please login to place an order",
@@ -293,6 +290,19 @@ const Checkout = () => {
             setTimeout(() => navigate("/login"), 2000);
             return;
         }
+
+        if (!user.customerId) {
+            setSnackbar({
+                open: true,
+                message: "Customer ID not found. Please re-login.",
+                severity: "error",
+            });
+            authService.logout();
+            setTimeout(() => navigate("/login"), 2000);
+            return;
+        }
+
+        if (!validateForm()) return;
 
         setLoading(true);
 
@@ -305,11 +315,11 @@ const Checkout = () => {
 
             // Prepare checkout data
             const checkoutData = {
-                customerId: user.customerId,
+                customerId: user.userId,
                 firstName: form.firstName,
                 lastName: form.lastName,
                 email: form.email,
-                phoneNumber: form.phone,
+                phone: form.phone,
                 secondaryPhone: form.secondaryPhone || null,
                 deliveryMethod: deliveryMethod,
                 street: form.street || null,
@@ -323,15 +333,19 @@ const Checkout = () => {
                 diffPostal: shipTo === "different" ? form.diffPostal : null,
                 paymentMethod: paymentMethod,
                 orderNote: form.orderNote || null,
-                cityId: null, // Optional: add city selection
+                cityId: null,
             };
 
             console.log("Sending checkout data:", checkoutData);
 
-            // Send to backend
             const response = await axios.post(
                 "http://localhost:8080/api/orders/checkout",
-                checkoutData
+                checkoutData,
+                {
+                    headers: {
+                        Authorization: `Bearer ${user.token}`,
+                    },
+                }
             );
 
             console.log("Order response:", response.data);
@@ -343,13 +357,13 @@ const Checkout = () => {
             // Show success message
             setSnackbar({
                 open: true,
-                message: `Order placed successfully! Order #${response.data.orderId}`,
+                message: `Order placed successfully! Order #${response.data.orderId}. Check your email!`,
                 severity: "success",
             });
 
-            // Redirect to order confirmation or orders page
+            // Redirect to home after 2 seconds
             setTimeout(() => {
-                navigate(`/orders/${response.data.orderId}`);
+                navigate("/");
             }, 2000);
 
         } catch (error) {
@@ -357,10 +371,12 @@ const Checkout = () => {
             
             let errorMessage = "Failed to place order. Please try again.";
             
-            if (error.response) {
+            if (error.response?.data) {
                 errorMessage = error.response.data.message || 
                               error.response.data.error || 
-                              errorMessage;
+                              JSON.stringify(error.response.data);
+            } else if (error.message) {
+                errorMessage = error.message;
             }
 
             setSnackbar({
@@ -378,7 +394,6 @@ const Checkout = () => {
             <Navbar />
 
             <Box sx={{ maxWidth: 1300, mx: "auto", px: { xs: 2, sm: 3, md: 5 }, pt: 3, pb: 10 }}>
-                {/* Back to cart */}
                 <Button
                     startIcon={<ArrowBackIos sx={{ fontSize: 11 }} />}
                     onClick={() => navigate("/cart")}
@@ -397,17 +412,13 @@ const Checkout = () => {
                     BACK TO CART
                 </Button>
 
-                {/* ── OUTER LAYOUT ── */}
                 <Box sx={{
                     display: "flex",
                     gap: 3,
                     alignItems: "flex-start",
                     flexDirection: { xs: "column", md: "row" },
                 }}>
-
-                    {/* ══════════════════════════════
-                        LEFT — BILLING FORM  (3/5)
-                    ══════════════════════════════ */}
+                    {/* LEFT — BILLING FORM */}
                     <Box sx={{ flex: "3 1 0%", minWidth: 0, width: { xs: "100%", md: "auto" } }}>
                         <Box sx={{
                             backgroundColor: "#fff",
@@ -415,9 +426,38 @@ const Checkout = () => {
                             p: { xs: 2.5, sm: 4 },
                             boxShadow: "0 2px 20px rgba(0,0,0,0.05)",
                         }}>
+                            {/* User Welcome Badge */}
+                            {(() => {
+                                const user = authService.getCurrentUser();
+                                return user ? (
+                                    <Box sx={{ 
+                                        mb: 3, 
+                                        p: 2, 
+                                        backgroundColor: "#f5f5f5", 
+                                        borderRadius: 2,
+                                        display: "flex",
+                                        alignItems: "center",
+                                        gap: 2,
+                                    }}>
+                                        <Avatar sx={{ bgcolor: "#111", width: 40, height: 40 }}>
+                                            {user.username?.charAt(0).toUpperCase()}
+                                        </Avatar>
+                                        <Box>
+                                            <Typography variant="body2" fontWeight="bold" color="#111">
+                                                {user.username}
+                                            </Typography>
+                                            {user.email && (
+                                                <Typography variant="caption" color="text.secondary">
+                                                    {user.email}
+                                                </Typography>
+                                            )}
+                                        </Box>
+                                    </Box>
+                                ) : null;
+                            })()}
+
                             <SectionTitle>BILLING DETAILS</SectionTitle>
 
-                            {/* First name / Last name */}
                             <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 2 }}>
                                 <TextField 
                                     fullWidth 
@@ -439,7 +479,6 @@ const Checkout = () => {
                                 />
                             </Box>
 
-                            {/* Delivery / Pickup toggle */}
                             <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 2, mt: 2 }}>
                                 <ToggleBtn
                                     active={deliveryMethod === "delivery"}
@@ -457,7 +496,6 @@ const Checkout = () => {
                                 </ToggleBtn>
                             </Box>
 
-                            {/* Address — delivery only */}
                             {deliveryMethod === "delivery" && (
                                 <>
                                     <SectionTitle>ADDRESS</SectionTitle>
@@ -505,7 +543,6 @@ const Checkout = () => {
                                 </>
                             )}
 
-                            {/* Contact Information */}
                             <SectionTitle>CONTACT INFORMATION</SectionTitle>
                             <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 2 }}>
                                 <TextField 
@@ -538,7 +575,6 @@ const Checkout = () => {
 
                             <Divider sx={{ my: 3, borderColor: "#f0f0f0" }} />
 
-                            {/* Ship To — delivery only */}
                             {deliveryMethod === "delivery" && (
                                 <>
                                     <SectionTitle>SHIP TO?</SectionTitle>
@@ -560,7 +596,6 @@ const Checkout = () => {
                                         </ToggleBtn>
                                     </Box>
 
-                                    {/* Different address fields */}
                                     {shipTo === "different" && (
                                         <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 2, mt: 2 }}>
                                             <TextField fullWidth placeholder="Street address*" size="small"
@@ -576,7 +611,6 @@ const Checkout = () => {
                                 </>
                             )}
 
-                            {/* Order Note */}
                             <Typography variant="caption" fontWeight="bold"
                                 sx={{ letterSpacing: 2, color: "#111", display: "block", mt: 4, mb: 1, fontSize: 11 }}>
                                 ORDER NOTE (OPTIONAL)
@@ -588,9 +622,7 @@ const Checkout = () => {
                         </Box>
                     </Box>
 
-                    {/* ══════════════════════════════
-                        RIGHT — ORDER SUMMARY  (2/5)
-                    ══════════════════════════════ */}
+                    {/* RIGHT — ORDER SUMMARY */}
                     <Box sx={{
                         flex: "2 1 0%",
                         minWidth: 0,
@@ -603,7 +635,6 @@ const Checkout = () => {
                             borderRadius: 3,
                             p: { xs: 2.5, sm: 3.5 },
                         }}>
-                            {/* Cart Items */}
                             {cart.length === 0 ? (
                                 <Typography color="#555" variant="body2" textAlign="center" py={4}>
                                     Your cart is empty.
@@ -697,7 +728,6 @@ const Checkout = () => {
                                 })
                             )}
 
-                            {/* Totals */}
                             <Box sx={{ mt: 2.5 }}>
                                 <Box sx={{ display: "flex", justifyContent: "space-between", mb: 1.2 }}>
                                     <Typography variant="caption" color="#888" sx={{ letterSpacing: 1.5, fontWeight: "bold" }}>
@@ -747,7 +777,6 @@ const Checkout = () => {
                                 </Box>
                             </Box>
 
-                            {/* Payment Methods */}
                             <Typography variant="caption" color="#888" sx={{ display: "block", mb: 1, letterSpacing: 1.5, fontWeight: "bold" }}>
                                 PAYMENT METHOD *
                             </Typography>
@@ -759,7 +788,6 @@ const Checkout = () => {
                                 active={payment.visa} onToggle={() => togglePayment("visa")}
                                 subLabel="Secure card payment via" badgeText="PayHere" badgeColor="#e67e22" />
                           
-                            {/* Privacy notice */}
                             <Typography variant="caption" color="#444"
                                 sx={{ display: "block", mt: 2, mb: 3, lineHeight: 1.7 }}>
                                 Your personal data will be used to process your order, support your experience
@@ -769,7 +797,6 @@ const Checkout = () => {
                                 </span>.
                             </Typography>
 
-                            {/* Place Order Button */}
                             <Button
                                 fullWidth
                                 onClick={handlePlaceOrder}
@@ -799,7 +826,6 @@ const Checkout = () => {
                 </Box>
             </Box>
 
-            {/* Snackbar for notifications */}
             <Snackbar
                 open={snackbar.open}
                 autoHideDuration={4000}

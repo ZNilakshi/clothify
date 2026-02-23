@@ -14,8 +14,12 @@ const CategorySection = ({ categories, getImageUrl }) => {
             sx={{ 
                 height: "100vh",
                 display: "flex", 
+                margin: 0,
+                padding: 0,
                 alignItems: "center",
                 justifyContent: "center", 
+backgroundColor: "#121212",
+borderRadius: "30px",
             }}
         >
             <Stack 
