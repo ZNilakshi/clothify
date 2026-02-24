@@ -9,6 +9,7 @@ import authService from "./services/authService";
 import CategoryProducts from "./pages/CategoryProducts";
 import SubCategoryProducts from "./pages/SubCategoryProducts";
 import Checkout from "./pages/Checkout";
+import UserDashboard from "./pages/UserDashboard";
 
 const ProtectedRoute = ({ children, adminOnly = false }) => {
     const user = authService.getCurrentUser();
@@ -36,6 +37,7 @@ function App() {
                 <Route path="/category/:categoryId" element={<CategoryProducts />} />
                 <Route path="/subcategory/:subCategoryId" element={<SubCategoryProducts />} />
                 <Route path="/checkout" element={<Checkout />} />
+                <Route path="/dashboard" element={<UserDashboard />} />
 
 <Route
                     path="/admin/dashboard"

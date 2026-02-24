@@ -511,7 +511,7 @@ const Cart = () => {
         const price = parseFloat(item.discountPrice ?? item.unitPrice ?? item.sellingPrice ?? item.price ?? 0);
         return t + price * (item.quantity ?? 1);
     }, 0);
-    const tax   = subtotal * 0.1;
+    const tax   = subtotal * 0;
     const total = subtotal + tax;
 
     /* ── Loading ── */
@@ -779,7 +779,6 @@ const Cart = () => {
                                 <Box sx={{ p: 3 }}>
                                     {[
                                         { label: `Subtotal (${cart.length} item${cart.length !== 1 ? "s" : ""})`, value: subtotal },
-                                        { label: "Tax (10%)", value: tax },
                                     ].map(({ label, value }) => (
                                         <Box key={label} sx={{
                                             display: "flex", justifyContent: "space-between",
