@@ -29,6 +29,34 @@ const getHeaders = () => {
 };
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   CART PERSISTENCE — survives page refresh
+   ═══════════════════════════════════════════════════════════════════════════ */
+const CART_QTY_KEY = "clothify_cart_qty";
+const CART_IDS_KEY = "clothify_cart_ids";
+
+const loadLocalCartQty = () => {
+    try {
+        const raw = localStorage.getItem(CART_QTY_KEY);
+        return raw ? JSON.parse(raw) : {};
+    } catch {
+        return {};
+    }
+};
+const saveLocalCartQty = (map) => {
+    try {
+        localStorage.setItem(CART_QTY_KEY, JSON.stringify(map));
+    } catch {}
+};
+
+// Persists cartItemId per variant key so decrease/remove works even after refresh
+const loadLocalCartIds = () => {
+    try { return JSON.parse(localStorage.getItem(CART_IDS_KEY)) || {}; } catch { return {}; }
+};
+const saveLocalCartIds = (map) => {
+    try { localStorage.setItem(CART_IDS_KEY, JSON.stringify(map)); } catch {}
+};
+
+/* ═══════════════════════════════════════════════════════════════════════════
    CONSTANTS
    ═══════════════════════════════════════════════════════════════════════════ */
 const COLOR_HEX = {
@@ -53,6 +81,11 @@ if (!document.head.querySelector("#pd-styles")) {
         @keyframes pdImgIn  { from{opacity:0;transform:scale(1.04)} to{opacity:1;transform:scale(1)} }
         @keyframes pdFadeUp { from{opacity:0;transform:translateY(18px)} to{opacity:1;transform:translateY(0)} }
         @keyframes pdSpin   { to{transform:rotate(360deg)} }
+        @keyframes pulse { 
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
     `;
     document.head.appendChild(s);
 }
@@ -71,14 +104,12 @@ const bwTheme = createTheme({
    HELPER FUNCTIONS
    ═══════════════════════════════════════════════════════════════════════════ */
 
-// Image URL resolver
 const resolveUrl = (url) => {
     if (!url) return null;
     if (url.startsWith("http")) return url;
     return `${API}${url.startsWith("/") ? url : `/${url}`}`;
 };
 
-// Collect all product images
 const collectImages = (product) => {
     const imgs = [];
     const push = (u) => {
@@ -93,134 +124,120 @@ const collectImages = (product) => {
     return imgs;
 };
 
-// Normalize string for comparison - CRITICAL for variant matching
 const normalize = (str) => {
     if (!str) return null;
     return String(str).trim().toUpperCase();
 };
 
-// Extract color from cart item (handles all field variations)
+// ─── Extract color from cart item — covers all known API field variations ───
 const getItemColor = (item) => {
     return normalize(
-        item.color || 
-        item.selectedColor || 
-        item.variant?.color || 
-        item.product?.color ||
+        item.color ??
+        item.selectedColor ??
+        item.variant?.color ??
+        item.product?.color ??
+        item.colorName ??
+        item.colorCode ??
         null
     );
 };
 
-// Extract size from cart item (handles all field variations)
+// ─── Extract size from cart item — covers all known API field variations ────
 const getItemSize = (item) => {
     return normalize(
-        item.size || 
-        item.selectedSize || 
-        item.variant?.size || 
-        item.product?.size ||
+        item.size ??
+        item.selectedSize ??
+        item.variant?.size ??
+        item.product?.size ??
+        item.sizeName ??
+        item.sizeCode ??
         null
     );
 };
 
-// Get cart quantity for specific variant - IMPROVED VERSION
-const getInCartQty = (cartItems, productId, color, size) => {
-    if (!cartItems?.length) {
-        console.log("🔍 Cart is empty");
-        return 0;
-    }
-
-    const normalizedColor = normalize(color);
-    const normalizedSize = normalize(size);
-
-    console.log("🔍 Looking for variant:", {
-        productId,
-        color: normalizedColor,
-        size: normalizedSize,
-        totalCartItems: cartItems.length
-    });
-
-    const matchingItems = cartItems.filter(item => {
-        const pid = item.productId ?? item.product?.productId;
-        const itemColor = getItemColor(item);
-        const itemSize = getItemSize(item);
-
-        console.log(`  Checking item:`, {
-            cartItemId: item.cartItemId ?? item.id,
-            pid,
-            itemColor,
-            itemSize,
-            qty: item.quantity
-        });
-
-        // Must match product ID
-        if (pid !== productId) {
-            console.log(`    ❌ Product ID mismatch (${pid} !== ${productId})`);
-            return false;
-        }
-
-        // If checking for specific variant (has color AND size)
-        if (normalizedColor && normalizedSize) {
-            const colorMatch = itemColor === normalizedColor;
-            const sizeMatch = itemSize === normalizedSize;
-            const matches = colorMatch && sizeMatch;
-            
-            console.log(`    ${matches ? '✅' : '❌'} Variant: ${itemColor}/${itemSize} ${matches ? '==' : '!='} ${normalizedColor}/${normalizedSize}`);
-            return matches;
-        }
-
-        // For non-variant products, only match items without color/size
-        const noVariant = !itemColor && !itemSize;
-        console.log(`    ${noVariant ? '✅' : '❌'} No-variant match: ${!itemColor && !itemSize}`);
-        return noVariant;
-    });
-
-    const totalQty = matchingItems.reduce((sum, item) => sum + (item.quantity ?? 1), 0);
-    
-    console.log(`📊 Total quantity in cart for this variant: ${totalQty}`);
-    console.log(`📦 Matching items:`, matchingItems.map(i => ({
-        id: i.cartItemId ?? i.id,
-        color: getItemColor(i),
-        size: getItemSize(i),
-        qty: i.quantity
-    })));
-
-    return totalQty;
+// ─── Extract productId from cart item — covers all known API field variations ───
+const getItemProductId = (item) => {
+    return (
+        item.productId ??
+        item.product?.productId ??
+        item.product?.id ??
+        item.pid ??
+        null
+    );
 };
 
-// Find specific cart item for a variant - IMPROVED VERSION
-const getCartItemForVariant = (cartItems, productId, color, size) => {
+// ─── Build a stable variant key ───────────────────────────────────────────
+const makeVariantKey = (productId, color, size) =>
+    `${productId}__${normalize(color) ?? ""}__${normalize(size) ?? ""}`;
+
+// ─── Sum cart qty for a specific product + variant ────────────────────────
+const getInCartQty = (cartItems, productId, color, size) => {
+    if (!cartItems?.length) return 0;
+    const normColor = normalize(color);
+    const normSize  = normalize(size);
+
+    return cartItems
+        .filter(item => {
+            const pid       = getItemProductId(item);
+            const itemColor = getItemColor(item);
+            const itemSize  = getItemSize(item);
+            if (pid !== productId) return false;
+            if (normColor && normSize) {
+                // Fast path: known fields
+                if (itemColor === normColor && itemSize === normSize) return true;
+                // Deep path: scan all string values
+                const vals = deepStringValues(item);
+                return vals.includes(normColor) && vals.includes(normSize);
+            }
+            return !itemColor && !itemSize;
+        })
+        .reduce((sum, item) => sum + (item.quantity ?? 1), 0);
+};
+
+// ─── Deep-scan all string values in an object (handles any nesting level) ─
+const deepStringValues = (obj, depth = 0) => {
+    if (depth > 4 || !obj || typeof obj !== "object") return [];
+    return Object.values(obj).flatMap(v => {
+        if (typeof v === "string") return [v.trim().toUpperCase()];
+        if (typeof v === "object" && v !== null) return deepStringValues(v, depth + 1);
+        return [];
+    });
+};
+
+// ─── Find cart item — tries exact field match, then deep object scan ──────
+// This works regardless of what field names the API uses for color/size.
+const findCartItem = (cartItems, productId, color, size) => {
     if (!cartItems?.length) return null;
+    const normColor = normalize(color);
+    const normSize  = normalize(size);
 
-    const normalizedColor = normalize(color);
-    const normalizedSize = normalize(size);
-
-    console.log("🔎 Finding cart item for:", { productId, color: normalizedColor, size: normalizedSize });
-
-    const found = cartItems.find(item => {
-        const pid = item.productId ?? item.product?.productId;
+    // Pass 1: standard field extraction (fast path)
+    const fast = cartItems.find(item => {
+        const pid       = getItemProductId(item);
         const itemColor = getItemColor(item);
-        const itemSize = getItemSize(item);
-
+        const itemSize  = getItemSize(item);
         if (pid !== productId) return false;
-
-        if (normalizedColor && normalizedSize) {
-            return itemColor === normalizedColor && itemSize === normalizedSize;
-        }
-
+        if (normColor && normSize) return itemColor === normColor && itemSize === normSize;
         return !itemColor && !itemSize;
     });
+    if (fast) return fast;
 
-    if (found) {
-        console.log("✅ Found cart item:", {
-            cartItemId: found.cartItemId ?? found.id,
-            color: getItemColor(found),
-            size: getItemSize(found),
-            quantity: found.quantity
+    // Pass 2: deep scan — search every string value in the item object
+    if (normColor && normSize) {
+        const deep = cartItems.find(item => {
+            const pid = getItemProductId(item);
+            if (pid !== productId) return false;
+            const vals = deepStringValues(item);
+            return vals.includes(normColor) && vals.includes(normSize);
         });
-    } else {
-        console.log("❌ Cart item not found");
+        if (deep) return deep;
     }
 
-    return found;
+    // Pass 3: productId-only match — if only one item exists for this product, use it
+    const byProduct = cartItems.filter(item => getItemProductId(item) === productId);
+    if (byProduct.length === 1) return byProduct[0];
+
+    return null;
 };
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -354,22 +371,46 @@ const ProductDetails = () => {
     const navigate = useNavigate();
 
     // Product state
-    const [product, setProduct] = useState(null);
-    const [loading, setLoading] = useState(true);
+    const [product, setProduct]               = useState(null);
+    const [loading, setLoading]               = useState(true);
     const [relatedProducts, setRelatedProducts] = useState([]);
 
     // Gallery state
-    const [images, setImages] = useState([]);
+    const [images, setImages]     = useState([]);
     const [activeImg, setActiveImg] = useState(0);
 
     // Selection state
     const [selectedColor, setSelectedColor] = useState(null);
-    const [selectedSize, setSelectedSize] = useState(null);
-    const [quantity, setQuantity] = useState(1);
+    const [selectedSize,  setSelectedSize]  = useState(null);
+    const [quantity, setQuantity]           = useState(1);
 
     // Cart state
-    const [cartItems, setCartItems] = useState([]);
+    const [cartItems, setCartItems]     = useState([]);
     const [addingToCart, setAddingToCart] = useState(false);
+
+    // ─── Persistent optimistic tracker ──────────────────────────────────────
+    // Initialised from localStorage so quantities survive page refresh.
+    // Updated immediately on every add/remove so the UI never lags behind.
+    const [localCartQty, setLocalCartQty] = useState(() => loadLocalCartQty());
+
+    // Always save to localStorage whenever localCartQty changes
+    const updateLocalCartQty = useCallback((updater) => {
+        setLocalCartQty(prev => {
+            const next = typeof updater === "function" ? updater(prev) : updater;
+            saveLocalCartQty(next);
+            return next;
+        });
+    }, []);
+
+    // ─── Persistent cartItemId store — needed to update/remove after refresh ─
+    const [localCartIds, setLocalCartIds] = useState(() => loadLocalCartIds());
+    const updateLocalCartIds = useCallback((updater) => {
+        setLocalCartIds(prev => {
+            const next = typeof updater === "function" ? updater(prev) : updater;
+            saveLocalCartIds(next);
+            return next;
+        });
+    }, []);
 
     // UI state
     const [snackbar, setSnackbar] = useState({ open: false, message: "", severity: "success" });
@@ -379,16 +420,41 @@ const ProductDetails = () => {
        ─────────────────────────────────────────────────────────────────────── */
     const fetchCart = useCallback(async () => {
         const user = getUser();
-        if (!user?.customerId) return;
-        
+        if (!user?.customerId) return [];
+
         try {
-            const res = await axios.get(`${API}/api/cart/customer/${user.customerId}`, { headers: getHeaders() });
-            const data = res.data;
+            const res   = await axios.get(`${API}/api/cart/customer/${user.customerId}`, { headers: getHeaders() });
+            const data  = res.data;
             const items = Array.isArray(data) ? data : (data.items ?? data.cartItems ?? data.cart ?? []);
             setCartItems(items);
-            console.log("✅ Cart fetched:", items);
+
+            if (items.length > 0) {
+                const serverQtys = {};
+                const serverIds  = {};
+                items.forEach(item => {
+                    const pid    = getItemProductId(item);
+                    const color  = getItemColor(item);
+                    const size   = getItemSize(item);
+                    const key    = makeVariantKey(pid, color, size);
+                    const itemId = item.cartItemId ?? item.id;
+                    serverQtys[key] = (serverQtys[key] ?? 0) + (item.quantity ?? 1);
+                    if (itemId) serverIds[key] = itemId;
+                });
+                updateLocalCartQty(prev => {
+                    const merged = { ...prev };
+                    Object.entries(serverQtys).forEach(([k, v]) => { merged[k] = Math.max(merged[k] ?? 0, v); });
+                    return merged;
+                });
+                updateLocalCartIds(prev => ({ ...prev, ...serverIds }));
+            } else {
+                updateLocalCartQty({});
+                updateLocalCartIds({});
+            }
+
+            return items; // ← return fresh items for immediate use by callers
         } catch (err) {
             console.error("❌ Cart fetch failed:", err);
+            return [];
         }
     }, []);
 
@@ -401,14 +467,12 @@ const ProductDetails = () => {
             setProduct(data);
             setImages(collectImages(data));
 
-            // Auto-select first available variant
             if (data.variants?.length > 0) {
                 const first = data.variants.find(v => v.quantity > 0) || data.variants[0];
                 setSelectedColor(first.color);
                 setSelectedSize(first.size);
             }
 
-            // Load related products
             const all = await productService.getActiveProducts();
             setRelatedProducts(
                 all.filter(p => p.categoryId === data.categoryId && p.productId !== data.productId).slice(0, 10)
@@ -434,30 +498,14 @@ const ProductDetails = () => {
         return () => window.removeEventListener("cartUpdated", handler);
     }, [fetchCart]);
 
-    // Debug: Log cart items whenever they change
-    useEffect(() => {
-        if (cartItems.length > 0) {
-            console.log("🛒 Current Cart State:");
-            console.table(cartItems.map(item => ({
-                CartItemId: item.cartItemId ?? item.id,
-                ProductId: item.productId ?? item.product?.productId,
-                Color: getItemColor(item),
-                Size: getItemSize(item),
-                Quantity: item.quantity,
-                RawColor: item.color || item.selectedColor || 'null',
-                RawSize: item.size || item.selectedSize || 'null'
-            })));
-        }
-    }, [cartItems]);
-
     /* ───────────────────────────────────────────────────────────────────────
        COMPUTED VALUES
        ─────────────────────────────────────────────────────────────────────── */
-    const productId = product?.productId || product?.id;
+    const productId   = product?.productId || product?.id;
     const hasVariants = product?.variants?.length > 0;
-    
+
     const availableColors = [...new Set((product?.variants || []).map(v => v.color))];
-    const availableSizes = (() => {
+    const availableSizes  = (() => {
         if (!hasVariants || !selectedColor) return [];
         return product.variants.filter(v => v.color === selectedColor).map(v => v.size);
     })();
@@ -469,36 +517,38 @@ const ProductDetails = () => {
         return product.variants.find(v => v.color === selectedColor && v.size === selectedSize)?.quantity || 0;
     })();
 
-    const inCartQty = (() => {
+    // ─── FIX: use the HIGHER of server cart qty and local optimistic qty ───
+    const currentVariantKey = makeVariantKey(productId, selectedColor, selectedSize);
+
+    const serverInCartQty = (() => {
         if (!product) return 0;
-        if (hasVariants && selectedColor && selectedSize) {
+        if (hasVariants && selectedColor && selectedSize)
             return getInCartQty(cartItems, productId, selectedColor, selectedSize);
-        }
-        if (!hasVariants) {
+        if (!hasVariants)
             return getInCartQty(cartItems, productId, null, null);
-        }
         return 0;
     })();
+
+    // Take whichever is higher — local tracker is optimistic; server may lag or use different fields
+    const inCartQty = Math.max(serverInCartQty, localCartQty[currentVariantKey] ?? 0);
 
     const availableToAdd = Math.max(0, variantStock - inCartQty);
     const cantAdd = hasVariants && (!selectedColor || !selectedSize);
 
-    const hasDiscount = product?.discount && parseFloat(product.discount) > 0;
+    const hasDiscount   = product?.discount && parseFloat(product.discount) > 0;
     const originalPrice = parseFloat(product?.sellingPrice || product?.price || 0);
-    const finalPrice = hasDiscount && product?.discountPrice ? parseFloat(product.discountPrice) : originalPrice;
+    const finalPrice    = hasDiscount && product?.discountPrice ? parseFloat(product.discountPrice) : originalPrice;
 
-    // Debug: Log selected variant
+    // Auto-adjust quantity if it exceeds available stock
     useEffect(() => {
-        if (selectedColor && selectedSize) {
-            console.log("🎨 Selected Variant:", {
-                color: normalize(selectedColor),
-                size: normalize(selectedSize),
-                stock: variantStock,
-                inCart: inCartQty,
-                available: availableToAdd
-            });
+        if (quantity > availableToAdd && availableToAdd > 0) {
+            setQuantity(availableToAdd);
         }
-    }, [selectedColor, selectedSize, variantStock, inCartQty, availableToAdd]);
+        // If nothing is available, reset to 1 so it's ready if stock changes
+        if (availableToAdd === 0) {
+            setQuantity(1);
+        }
+    }, [availableToAdd]);
 
     /* ───────────────────────────────────────────────────────────────────────
        HANDLERS
@@ -524,71 +574,103 @@ const ProductDetails = () => {
     };
 
     const handleAddToCart = async () => {
+        if (addingToCart) return;
+
         if (hasVariants && (!selectedColor || !selectedSize)) {
             setSnackbar({ open: true, message: "Please select color and size", severity: "warning" });
             return;
         }
-        
+
         const user = getUser();
         if (!user) {
             setSnackbar({ open: true, message: "Please log in to add items to cart", severity: "error" });
             return;
         }
-        
+
         if (availableToAdd <= 0) {
-            setSnackbar({ 
-                open: true, 
-                message: `No more stock available. You already have ${inCartQty} in cart.`, 
-                severity: "warning" 
+            setSnackbar({
+                open: true,
+                message: hasVariants && selectedColor && selectedSize
+                    ? `${selectedColor} / ${selectedSize} is out of stock`
+                    : `Maximum quantity reached. You have ${inCartQty} of ${variantStock} in your cart.`,
+                severity: "warning",
             });
             return;
         }
 
-        console.log("➕ Adding to cart:", {
-            productId,
-            quantity,
-            color: selectedColor,
-            size: selectedSize,
-            currentInCart: inCartQty,
-            stock: variantStock,
-            availableToAdd
-        });
+        const qtyToAdd = Math.min(quantity, availableToAdd);
+        if (qtyToAdd <= 0) {
+            setSnackbar({
+                open: true,
+                message: `Only ${availableToAdd} more available. You already have ${inCartQty} in cart.`,
+                severity: "warning",
+            });
+            return;
+        }
 
         setAddingToCart(true);
-        try {
-            const payload = { 
-                productId, 
-                quantity, 
-                color: selectedColor || null, 
-                size: selectedSize || null 
-            };
 
-            console.log("📤 API Request:", payload);
+        // ─── Optimistically increment local tracker BEFORE API call ──────
+        // This immediately blocks the UI from allowing another add, and
+        // persists to localStorage so a mid-add refresh still works.
+        updateLocalCartQty(prev => ({
+            ...prev,
+            [currentVariantKey]: (prev[currentVariantKey] ?? 0) + qtyToAdd,
+        }));
+
+        try {
+            const payload = {
+                productId,
+                quantity: qtyToAdd,
+                color: selectedColor || null,
+                size: selectedSize  || null,
+            };
 
             const response = await axios.post(
                 `${API}/api/cart/customer/${user.customerId}/add`,
                 payload,
                 { headers: getHeaders() }
             );
-            
-            console.log("📥 API Response:", response.data);
-            
+
+            // Save the cartItemId returned by the server so we can update/remove later.
+            // Check every common field name the API might use.
+            const rd = response.data;
+            const returnedId =
+                rd?.cartItemId ?? rd?.id ?? rd?.itemId ?? rd?.cart_item_id ??
+                rd?.item?.cartItemId ?? rd?.item?.id ?? rd?.item?.itemId ??
+                rd?.cartItem?.cartItemId ?? rd?.cartItem?.id ??
+                rd?.data?.cartItemId ?? rd?.data?.id ??
+                null;
+            if (returnedId) {
+                updateLocalCartIds(prev => ({ ...prev, [currentVariantKey]: returnedId }));
+            }
+
+            // Refresh real cart data (will sync localCartQty via fetchCart)
             await fetchCart();
             window.dispatchEvent(new Event("cartUpdated"));
-            
-            setSnackbar({ 
-                open: true, 
-                message: `${quantity} item${quantity > 1 ? "s" : ""} added to cart`, 
-                severity: "success" 
+
+            setSnackbar({
+                open: true,
+                message: hasVariants && selectedColor && selectedSize
+                    ? `✓ Added ${qtyToAdd} × ${product.productName} (${selectedColor} / ${selectedSize})`
+                    : `✓ Added ${qtyToAdd} × ${product.productName} to cart`,
+                severity: "success",
             });
+
             setQuantity(1);
         } catch (err) {
             console.error("❌ Add to cart error:", err);
-            console.error("Error response:", err.response?.data);
-            setSnackbar({ 
-                open: true, 
-                message: err.response?.data?.message || "Failed to add item to cart", 
-                severity: "error" 
+
+            // ─── Roll back optimistic update on failure ────────────────────
+            updateLocalCartQty(prev => ({
+                ...prev,
+                [currentVariantKey]: Math.max(0, (prev[currentVariantKey] ?? 0) - qtyToAdd),
+            }));
+
+            setSnackbar({
+                open: true,
+                message: err.response?.data?.message || "Failed to add item to cart",
+                severity: "error",
             });
         } finally {
             setAddingToCart(false);
@@ -599,57 +681,64 @@ const ProductDetails = () => {
         const user = getUser();
         if (!user?.customerId) return;
 
-        const cartItem = getCartItemForVariant(cartItems, productId, selectedColor, selectedSize);
+        // Step 1: try to find the item in current (possibly stale) cartItems
+        let freshItems = cartItems;
+        let cartItem   = findCartItem(freshItems, productId, selectedColor, selectedSize);
+
+        // Step 2: if not found, force-refresh and search in the fresh response
         if (!cartItem) {
-            console.error("❌ Cart item not found for variant:", {
-                productId,
-                color: normalize(selectedColor),
-                size: normalize(selectedSize)
-            });
-            setSnackbar({ open: true, message: "Item not found in cart", severity: "error" });
+            freshItems = await fetchCart();
+            cartItem   = findCartItem(freshItems, productId, selectedColor, selectedSize);
+        }
+
+        // Step 3: extract cartItemId — try every known field, then fall back to localStorage
+        const cartItemId =
+            cartItem?.cartItemId ??
+            cartItem?.id ??
+            cartItem?.itemId ??
+            cartItem?.cart_item_id ??
+            localCartIds[currentVariantKey] ??
+            null;
+
+        if (!cartItemId) {
+            setSnackbar({ open: true, message: "Could not find cart item. Please try again.", severity: "error" });
             return;
         }
 
-        const cartItemId = cartItem.cartItemId ?? cartItem.id;
-        const newQty = cartItem.quantity + delta;
+        const currentQty = cartItem?.quantity ?? inCartQty;
+        const newQty     = currentQty + delta;
 
-        console.log("🔄 Updating cart quantity:", {
-            cartItemId,
-            currentQty: cartItem.quantity,
-            delta,
-            newQty,
-            stock: variantStock
-        });
-
-        // Validate new quantity
         if (newQty > variantStock) {
-            setSnackbar({ 
-                open: true, 
-                message: `Only ${variantStock} available in stock`, 
-                severity: "warning" 
-            });
+            setSnackbar({ open: true, message: `Only ${variantStock} available in stock`, severity: "warning" });
             return;
         }
 
         if (newQty <= 0) {
-            // Remove item
+            // Optimistically clear immediately
+            updateLocalCartQty(prev => ({ ...prev, [currentVariantKey]: 0 }));
             try {
-                console.log("🗑️ Removing item from cart");
                 await axios.delete(
                     `${API}/api/cart/customer/${user.customerId}/item/${cartItemId}`,
                     { headers: getHeaders() }
                 );
+                updateLocalCartIds(prev => { const n = { ...prev }; delete n[currentVariantKey]; return n; });
                 await fetchCart();
                 window.dispatchEvent(new Event("cartUpdated"));
-                setSnackbar({ open: true, message: "Item removed from cart", severity: "success" });
+                setSnackbar({
+                    open: true,
+                    message: hasVariants && selectedColor && selectedSize
+                        ? `✓ Removed ${selectedColor} / ${selectedSize} from cart`
+                        : "✓ Item removed from cart",
+                    severity: "success",
+                });
             } catch (err) {
-                console.error("❌ Remove error:", err);
+                updateLocalCartQty(prev => ({ ...prev, [currentVariantKey]: currentQty }));
                 setSnackbar({ open: true, message: "Failed to remove item", severity: "error" });
             }
         } else {
-            // Update quantity
+            // Optimistically update immediately
+            updateLocalCartQty(prev => ({ ...prev, [currentVariantKey]: newQty }));
             try {
-                console.log("📝 Updating quantity to:", newQty);
                 await axios.put(
                     `${API}/api/cart/customer/${user.customerId}/item/${cartItemId}`,
                     null,
@@ -658,7 +747,7 @@ const ProductDetails = () => {
                 await fetchCart();
                 window.dispatchEvent(new Event("cartUpdated"));
             } catch (err) {
-                console.error("❌ Update error:", err);
+                updateLocalCartQty(prev => ({ ...prev, [currentVariantKey]: currentQty }));
                 setSnackbar({ open: true, message: "Failed to update quantity", severity: "error" });
             }
         }
@@ -902,7 +991,7 @@ const ProductDetails = () => {
                                             <Box sx={{ display: "flex", gap: 1.5, flexWrap: "wrap" }}>
                                                 {availableColors.map((color) => {
                                                     const isSelected = selectedColor === color;
-                                                    const hasStock = product.variants.some(v => v.color === color && v.quantity > 0);
+                                                    const hasStock   = product.variants.some(v => v.color === color && v.quantity > 0);
                                                     return (
                                                         <Box key={color} onClick={() => handleColorSelect(color)} title={color} sx={{
                                                             width: 36, height: 36,
@@ -928,8 +1017,8 @@ const ProductDetails = () => {
                                             <MonoLabel sx={{ mb: 1.5 }}>Size</MonoLabel>
                                             <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
                                                 {availableSizes.map((size) => {
-                                                    const isSelected = selectedSize === size;
-                                                    const variant = product.variants.find(v => v.color === selectedColor && v.size === size);
+                                                    const isSelected  = selectedSize === size;
+                                                    const variant     = product.variants.find(v => v.color === selectedColor && v.size === size);
                                                     const isAvailable = variant && variant.quantity > 0;
                                                     return (
                                                         <Box key={size} onClick={() => isAvailable && handleSizeSelect(size)} sx={{
@@ -1002,209 +1091,214 @@ const ProductDetails = () => {
                                         </Box>
                                     )}
 
-                                    {/* Cart Controls */}
-                                    {!cantAdd ? (
-                                        <Box sx={{ mt: "auto" }}>
-                                            {/* In Cart Section */}
-                                            {inCartQty > 0 && (
-                                                <Box sx={{ mb: 3, p: 2, backgroundColor: "#f0f7ff", border: "1px solid #e3f2fd", borderRadius: 1 }}>
-                                                    <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 1.5 }}>
-                                                        <Typography sx={{
-                                                            fontFamily: "'IBM Plex Mono', monospace",
-                                                            fontSize: 10, fontWeight: 600,
-                                                            letterSpacing: "0.1em", textTransform: "uppercase",
-                                                            color: "#1976d2",
-                                                        }}>
-                                                            In Your Cart
-                                                        </Typography>
+                                    {/* Low Stock Warning */}
+                                    {!cantAdd && variantStock > 0 && variantStock <= 3 && inCartQty === 0 && (
+                                        <Box sx={{
+                                            mb: 3, p: 1.5,
+                                            backgroundColor: "#fff3cd",
+                                            border: "1px solid #ffeeba",
+                                            display: "flex", alignItems: "center", gap: 1,
+                                        }}>
+                                            <Box sx={{
+                                                width: 8, height: 8,
+                                                backgroundColor: "#f59e0b",
+                                                borderRadius: "50%",
+                                                animation: "pulse 1.5s infinite",
+                                            }} />
+                                            <Typography sx={{
+                                                fontFamily: "'IBM Plex Mono', monospace",
+                                                fontSize: 10, color: "#856404",
+                                            }}>
+                                                Only {variantStock} left in stock — order soon
+                                            </Typography>
+                                        </Box>
+                                    )}
 
-                                                        {/* Variant Badges */}
-                                                        {hasVariants && selectedColor && selectedSize && (
-                                                            <Box sx={{ display: "flex", gap: 0.8 }}>
-                                                                <Box sx={{
-                                                                    display: "flex", alignItems: "center", gap: 0.5,
-                                                                    px: 0.8, py: 0.3,
-                                                                    backgroundColor: "rgba(25, 118, 210, 0.1)",
-                                                                    borderRadius: 0.5,
-                                                                }}>
-                                                                    <Box sx={{
-                                                                        width: 8, height: 8,
-                                                                        backgroundColor: COLOR_HEX[selectedColor] || "#ccc",
-                                                                        border: "1px solid rgba(0,0,0,0.2)",
-                                                                        borderRadius: "50%",
-                                                                    }} />
-                                                                    <Typography sx={{
-                                                                        fontFamily: "'IBM Plex Mono', monospace",
-                                                                        fontSize: 8, color: "#1976d2", fontWeight: 600,
-                                                                    }}>
-                                                                        {selectedColor}
-                                                                    </Typography>
-                                                                </Box>
-                                                                <Box sx={{
-                                                                    px: 0.8, py: 0.3,
-                                                                    backgroundColor: "rgba(25, 118, 210, 0.1)",
-                                                                    borderRadius: 0.5,
-                                                                }}>
-                                                                    <Typography sx={{
-                                                                        fontFamily: "'IBM Plex Mono', monospace",
-                                                                        fontSize: 8, color: "#1976d2", fontWeight: 600,
-                                                                    }}>
-                                                                        {selectedSize}
-                                                                    </Typography>
-                                                                </Box>
-                                                            </Box>
-                                                        )}
-                                                    </Box>
-
-                                                    <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
-                                                        <Box sx={{ display: "flex", alignItems: "center", border: "2px solid #1976d2" }}>
-                                                            <IconButton
-                                                                size="small"
-                                                                onClick={() => handleUpdateCartQty(-1)}
-                                                                sx={{
-                                                                    borderRadius: 0, px: 2, py: 1.2,
-                                                                    color: "#1976d2",
-                                                                    "&:hover": { backgroundColor: "#1976d2", color: "#fff" },
-                                                                    transition: "all 0.15s",
-                                                                }}
-                                                            >
-                                                                <Remove sx={{ fontSize: 16 }} />
-                                                            </IconButton>
-
-                                                            <Typography sx={{
-                                                                fontFamily: "'Playfair Display', serif",
-                                                                fontWeight: 700, fontSize: 20,
-                                                                px: 3, minWidth: 60, textAlign: "center",
-                                                                borderLeft: "2px solid #1976d2",
-                                                                borderRight: "2px solid #1976d2",
-                                                                color: "#1976d2",
-                                                            }}>
-                                                                {inCartQty}
-                                                            </Typography>
-
-                                                            <IconButton
-                                                                size="small"
-                                                                onClick={() => {
-                                                                    if (availableToAdd <= 0) {
-                                                                        setSnackbar({ 
-                                                                            open: true, 
-                                                                            message: "No more stock available", 
-                                                                            severity: "warning" 
-                                                                        });
-                                                                        return;
-                                                                    }
-                                                                    handleUpdateCartQty(1);
-                                                                }}
-                                                                disabled={availableToAdd <= 0}
-                                                                sx={{
-                                                                    borderRadius: 0, px: 2, py: 1.2,
-                                                                    color: "#1976d2",
-                                                                    "&:hover": { backgroundColor: "#1976d2", color: "#fff" },
-                                                                    "&:disabled": { color: "#ccc" },
-                                                                    transition: "all 0.15s",
-                                                                }}
-                                                            >
-                                                                <Add sx={{ fontSize: 16 }} />
-                                                            </IconButton>
-                                                        </Box>
-
-                                                        <Box>
-                                                            <MonoLabel sx={{ color: "#1976d2" }}>
-                                                                {inCartQty === 1 ? "item" : "items"} in cart
-                                                            </MonoLabel>
-                                                            {availableToAdd > 0 && (
-                                                                <MonoLabel sx={{ color: "#aaa", mt: 0.3 }}>
-                                                                    {availableToAdd} more available
-                                                                </MonoLabel>
-                                                            )}
-                                                        </Box>
-                                                    </Box>
-                                                </Box>
+                                    {/* Out of Stock Message */}
+                                    {!cantAdd && variantStock === 0 && inCartQty === 0 && (
+                                        <Box sx={{
+                                            mb: 3, p: 2.5,
+                                            backgroundColor: "#ffebee",
+                                            border: "2px solid #e53935",
+                                            textAlign: "center",
+                                        }}>
+                                            <Typography sx={{
+                                                fontFamily: "'IBM Plex Mono', monospace",
+                                                fontSize: 13, fontWeight: 700,
+                                                color: "#e53935", letterSpacing: "0.1em",
+                                                textTransform: "uppercase", mb: 0.5,
+                                            }}>
+                                                ⚡ OUT OF STOCK
+                                            </Typography>
+                                            {hasVariants && selectedColor && selectedSize && (
+                                                <Typography sx={{
+                                                    fontFamily: "'IBM Plex Mono', monospace",
+                                                    fontSize: 11, color: "#b71c1c", mb: 1,
+                                                }}>
+                                                    {selectedColor} / {selectedSize}
+                                                </Typography>
                                             )}
+                                            {availableColors.length > 0 && (
+                                                <Typography sx={{
+                                                    fontFamily: "'IBM Plex Mono', monospace",
+                                                    fontSize: 10, color: "#666", mt: 1,
+                                                }}>
+                                                    Try another color or size
+                                                </Typography>
+                                            )}
+                                        </Box>
+                                    )}
 
-                                            {/* Add to Cart Section */}
-                                            {(inCartQty === 0 || availableToAdd > 0) && (
+                                    {/* ── UNIFIED CART CONTROL ─────────────────────────────────── */}
+                                    {!cantAdd && (
+                                        <Box sx={{ mt: "auto" }}>
+                                            {inCartQty === 0 ? (
+                                                /* ── Nothing in cart: qty picker + Add button ── */
                                                 <>
-                                                    <Box sx={{ display: "flex", alignItems: "center", gap: 3, mb: 3 }}>
-                                                        <MonoLabel>{inCartQty > 0 ? "Add More" : "Qty"}</MonoLabel>
-                                                        <Box sx={{ display: "flex", alignItems: "center", border: "1px solid #e0e0e0" }}>
-                                                            <IconButton
-                                                                size="small"
-                                                                onClick={() => handleQuantityChange(-1)}
-                                                                disabled={quantity <= 1}
-                                                                sx={{
-                                                                    borderRadius: 0, px: 1.5, py: 1,
-                                                                    "&:hover": { backgroundColor: "#000", color: "#fff" },
-                                                                    "&:disabled": { color: "#ddd" },
-                                                                    transition: "all 0.15s",
-                                                                }}
-                                                            >
-                                                                <Remove sx={{ fontSize: 14 }} />
-                                                            </IconButton>
-                                                            <Typography sx={{
-                                                                fontFamily: "'Playfair Display', serif",
-                                                                fontWeight: 700, fontSize: 18,
-                                                                px: 3, minWidth: 48, textAlign: "center",
-                                                                borderLeft: "1px solid #e0e0e0",
-                                                                borderRight: "1px solid #e0e0e0",
-                                                                py: 0.8, lineHeight: 1.4,
-                                                            }}>
-                                                                {quantity}
-                                                            </Typography>
-                                                            <IconButton
-                                                                size="small"
-                                                                onClick={() => handleQuantityChange(1)}
-                                                                disabled={quantity >= availableToAdd}
-                                                                sx={{
-                                                                    borderRadius: 0, px: 1.5, py: 1,
-                                                                    "&:hover": { backgroundColor: "#000", color: "#fff" },
-                                                                    "&:disabled": { color: "#ddd" },
-                                                                    transition: "all 0.15s",
-                                                                }}
-                                                            >
-                                                                <Add sx={{ fontSize: 14 }} />
-                                                            </IconButton>
+                                                    {variantStock > 0 && (
+                                                        <Box sx={{ display: "flex", alignItems: "center", gap: 3, mb: 3 }}>
+                                                            <MonoLabel>Qty</MonoLabel>
+                                                            <Box sx={{ display: "flex", alignItems: "center", border: "1px solid #e0e0e0" }}>
+                                                                <IconButton size="small"
+                                                                    onClick={() => handleQuantityChange(-1)}
+                                                                    disabled={quantity <= 1}
+                                                                    sx={{ borderRadius: 0, px: 1.5, py: 1, "&:hover": { backgroundColor: "#000", color: "#fff" }, "&:disabled": { color: "#ddd" }, transition: "all 0.15s" }}
+                                                                >
+                                                                    <Remove sx={{ fontSize: 14 }} />
+                                                                </IconButton>
+                                                                <Typography sx={{
+                                                                    fontFamily: "'Playfair Display', serif",
+                                                                    fontWeight: 700, fontSize: 18,
+                                                                    px: 3, minWidth: 48, textAlign: "center",
+                                                                    borderLeft: "1px solid #e0e0e0",
+                                                                    borderRight: "1px solid #e0e0e0",
+                                                                    py: 0.8, lineHeight: 1.4,
+                                                                }}>
+                                                                    {quantity}
+                                                                </Typography>
+                                                                <IconButton size="small"
+                                                                    onClick={() => handleQuantityChange(1)}
+                                                                    disabled={quantity >= variantStock || addingToCart}
+                                                                    sx={{ borderRadius: 0, px: 1.5, py: 1, "&:hover": { backgroundColor: "#000", color: "#fff" }, "&:disabled": { color: "#ddd" }, transition: "all 0.15s" }}
+                                                                >
+                                                                    <Add sx={{ fontSize: 14 }} />
+                                                                </IconButton>
+                                                            </Box>
+                                                            <MonoLabel sx={{ color: "#bbb" }}>{variantStock} in stock</MonoLabel>
                                                         </Box>
-                                                        <MonoLabel sx={{ color: "#bbb" }}>
-                                                            {availableToAdd} available
-                                                        </MonoLabel>
-                                                    </Box>
+                                                    )}
 
-                                                    <Box
-                                                        onClick={!addingToCart ? handleAddToCart : undefined}
-                                                        sx={{
-                                                            width: "100%", py: 2,
-                                                            display: "flex", alignItems: "center", justifyContent: "center", gap: 1.5,
-                                                            backgroundColor: addingToCart ? "#555" : "#000",
-                                                            color: "#fff",
-                                                            cursor: addingToCart ? "not-allowed" : "pointer",
-                                                            transition: "background-color 0.2s ease",
-                                                            "&:hover": !addingToCart ? { backgroundColor: "#222" } : {},
-                                                        }}
-                                                    >
+                                                    <Box onClick={!addingToCart ? handleAddToCart : undefined} sx={{
+                                                        width: "100%", py: 2,
+                                                        display: "flex", alignItems: "center", justifyContent: "center", gap: 1.5,
+                                                        backgroundColor: variantStock === 0 ? "#ccc" : addingToCart ? "#555" : "#000",
+                                                        color: "#fff",
+                                                        cursor: variantStock === 0 ? "not-allowed" : addingToCart ? "wait" : "pointer",
+                                                        transition: "background-color 0.2s ease",
+                                                        "&:hover": variantStock > 0 && !addingToCart ? { backgroundColor: "#222" } : {},
+                                                    }}>
                                                         <ShoppingCart sx={{ fontSize: 16 }} />
                                                         <Typography sx={{
                                                             fontFamily: "'IBM Plex Mono', monospace",
                                                             fontWeight: 600, fontSize: 12,
                                                             letterSpacing: "0.1em", textTransform: "uppercase",
                                                         }}>
-                                                            {addingToCart ? "Adding…" : inCartQty > 0 ? "Add More to Cart" : "Add to Cart"}
+                                                            {addingToCart ? "Adding…" : variantStock === 0 ? "Out of Stock" : "Add to Cart"}
                                                         </Typography>
                                                     </Box>
                                                 </>
+                                            ) : (
+                                                /* ── Items in cart: single stepper controls cart qty directly ── */
+                                                <>
+                                                    {/* Variant badge row */}
+                                                    {hasVariants && selectedColor && selectedSize && (
+                                                        <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 2 }}>
+                                                            <ShoppingCart sx={{ fontSize: 13, color: "#666" }} />
+                                                            <MonoLabel sx={{ color: "#666" }}>In cart</MonoLabel>
+                                                            <Box sx={{ display: "flex", gap: 0.8, ml: 0.5 }}>
+                                                                <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, px: 1, py: 0.3, backgroundColor: "#f0f0eb", border: "1px solid #e0e0e0" }}>
+                                                                    <Box sx={{ width: 8, height: 8, backgroundColor: COLOR_HEX[selectedColor] || "#ccc", border: "1px solid rgba(0,0,0,0.15)", borderRadius: "50%", flexShrink: 0 }} />
+                                                                    <Typography sx={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, fontWeight: 600, color: "#000" }}>{selectedColor}</Typography>
+                                                                </Box>
+                                                                <Box sx={{ px: 1, py: 0.3, backgroundColor: "#f0f0eb", border: "1px solid #e0e0e0" }}>
+                                                                    <Typography sx={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, fontWeight: 600, color: "#000" }}>{selectedSize}</Typography>
+                                                                </Box>
+                                                            </Box>
+                                                        </Box>
+                                                    )}
+
+                                                    {/* Single stepper — directly controls total in cart */}
+                                                    <Box sx={{ display: "flex", alignItems: "center", gap: 2.5, mb: 2.5 }}>
+                                                        <Box sx={{ display: "flex", alignItems: "center", border: "2px solid #000", flexShrink: 0 }}>
+                                                            <IconButton size="small"
+                                                                onClick={() => handleUpdateCartQty(-1)}
+                                                                sx={{ borderRadius: 0, px: 2.5, py: 1.2, color: "#000", "&:hover": { backgroundColor: "#000", color: "#fff" }, transition: "all 0.15s" }}
+                                                            >
+                                                                <Remove sx={{ fontSize: 16 }} />
+                                                            </IconButton>
+                                                            <Typography sx={{
+                                                                fontFamily: "'Playfair Display', serif",
+                                                                fontWeight: 700, fontSize: 22,
+                                                                px: 3.5, minWidth: 64, textAlign: "center",
+                                                                borderLeft: "2px solid #000",
+                                                                borderRight: "2px solid #000",
+                                                                lineHeight: "44px",
+                                                            }}>
+                                                                {inCartQty}
+                                                            </Typography>
+                                                            <IconButton size="small"
+                                                                onClick={() => handleUpdateCartQty(1)}
+                                                                disabled={inCartQty >= variantStock}
+                                                                sx={{ borderRadius: 0, px: 2.5, py: 1.2, color: "#000", "&:hover": { backgroundColor: "#000", color: "#fff" }, "&:disabled": { color: "#ccc" }, transition: "all 0.15s" }}
+                                                            >
+                                                                <Add sx={{ fontSize: 16 }} />
+                                                            </IconButton>
+                                                        </Box>
+
+                                                        <Box>
+                                                            <Box sx={{ display: "flex", alignItems: "center", gap: 0.8 }}>
+                                                                <Box sx={{ width: 6, height: 6, borderRadius: "50%", backgroundColor: inCartQty >= variantStock ? "#f59e0b" : "#22c55e", flexShrink: 0 }} />
+                                                                <MonoLabel sx={{ color: "#444" }}>
+                                                                    {inCartQty >= variantStock ? "All stock in cart" : `${variantStock - inCartQty} more available`}
+                                                                </MonoLabel>
+                                                            </Box>
+                                                            <MonoLabel sx={{ color: "#bbb", mt: 0.5 }}>
+                                                                − remove  ·  + add more
+                                                            </MonoLabel>
+                                                        </Box>
+                                                    </Box>
+
+                                                    {/* Add more button — only when stock remains */}
+                                                    {inCartQty < variantStock && (
+                                                        <Box onClick={!addingToCart ? handleAddToCart : undefined} sx={{
+                                                            width: "100%", py: 1.6,
+                                                            display: "flex", alignItems: "center", justifyContent: "center", gap: 1.5,
+                                                            backgroundColor: addingToCart ? "#555" : "#000",
+                                                            color: "#fff",
+                                                            cursor: addingToCart ? "wait" : "pointer",
+                                                            transition: "background-color 0.2s ease",
+                                                            "&:hover": !addingToCart ? { backgroundColor: "#222" } : {},
+                                                        }}>
+                                                            <ShoppingCart sx={{ fontSize: 15 }} />
+                                                            <Typography sx={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600, fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                                                                {addingToCart ? "Adding…" : "Add More to Cart"}
+                                                            </Typography>
+                                                        </Box>
+                                                    )}
+                                                </>
                                             )}
                                         </Box>
-                                    ) : (
+                                    )}
+
+                                    {/* Select variant prompt */}
+                                    {cantAdd && (
                                         <Box sx={{ mt: "auto", border: "1px solid #000", p: 2, backgroundColor: "#f5f5f0" }}>
                                             <Typography sx={{
                                                 fontFamily: "'IBM Plex Mono', monospace",
                                                 fontSize: 11, fontWeight: 600,
                                                 letterSpacing: "0.08em", textTransform: "uppercase", color: "#000",
                                             }}>
-                                                {cantAdd ? "Select color and size"
-                                                    : inCartQty > 0 && availableToAdd === 0 ? `Max quantity in cart (${inCartQty})`
-                                                    : hasVariants && selectedColor && selectedSize ? `${selectedColor} / ${selectedSize} — Out of stock`
-                                                    : "Out of stock"}
+                                                Select color and size
                                             </Typography>
                                         </Box>
                                     )}

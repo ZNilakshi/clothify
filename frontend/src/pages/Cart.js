@@ -31,23 +31,13 @@ const getHeaders = () => {
     return u?.token ? { Authorization: `Bearer ${u.token}` } : {};
 };
 
-/*
-  Backend endpoints (from CartController.java):
-  GET    /api/cart/customer/{cid}                          → CartDTO
-  POST   /api/cart/customer/{cid}/add                     body: AddToCartDTO
-  PUT    /api/cart/customer/{cid}/item/{cartItemId}        ?quantity=N   ← @RequestParam!
-  DELETE /api/cart/customer/{cid}/item/{cartItemId}        → CartDTO
-  DELETE /api/cart/customer/{cid}/clear                    → 204
-*/
-
 const cartGet = (cid) =>
     axios.get(`${API}/api/cart/customer/${cid}`, { headers: getHeaders() });
 
-/* quantity is a @RequestParam → must go in the URL, not the body */
 const cartUpdateQty = (cid, cartItemId, quantity) =>
     axios.put(
         `${API}/api/cart/customer/${cid}/item/${cartItemId}`,
-        null,                                   /* no body */
+        null,
         { params: { quantity }, headers: getHeaders() }
     );
 
@@ -58,11 +48,215 @@ const cartClear = (cid) =>
     axios.delete(`${API}/api/cart/customer/${cid}/clear`, { headers: getHeaders() });
 
 /* ─── Unpack CartDTO → items array ──────────────────────────── */
-/*  CartDTO likely looks like { cartId, customerId, items: [...], total: ... }
-    We handle both a direct array and the nested shape just in case.         */
 const unpackCart = (data) => {
     if (Array.isArray(data)) return data;
     return data?.items ?? data?.cartItems ?? data?.cart ?? [];
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   DEEP FIELD RESOLVERS
+   ═══════════════════════════════════════════════════════════════ */
+
+/** Normalize string for comparison */
+const norm = (s) => (s ? String(s).trim().toUpperCase() : null);
+
+/** Recursively flatten all key→value pairs from any nested object */
+const flattenObject = (obj, prefix = "", depth = 0) => {
+    if (depth > 6 || !obj || typeof obj !== "object") return {};
+    return Object.entries(obj).reduce((acc, [k, v]) => {
+        const key = prefix ? `${prefix}.${k}` : k;
+        if (v && typeof v === "object" && !Array.isArray(v)) {
+            Object.assign(acc, flattenObject(v, key, depth + 1));
+        } else if (Array.isArray(v)) {
+            v.forEach((item, i) => {
+                if (item && typeof item === "object") {
+                    Object.assign(acc, flattenObject(item, `${key}[${i}]`, depth + 1));
+                } else {
+                    acc[`${key}[${i}]`] = item;
+                }
+            });
+        } else {
+            acc[key] = v;
+        }
+        return acc;
+    }, {});
+};
+
+/** Get all string values from a flattened object */
+const allStrings = (obj) =>
+    Object.values(flattenObject(obj))
+        .filter(v => typeof v === "string" && v.trim().length > 0)
+        .map(v => v.trim().toUpperCase());
+
+/** Get all number values */
+const allNumbers = (obj) =>
+    Object.values(flattenObject(obj))
+        .filter(v => typeof v === "number" && !isNaN(v));
+
+/* ─── DEBUG: logs full structure of first cart item once ─────── */
+let _debugged = false;
+const debugCartItem = (item) => {
+    if (_debugged) return;
+    _debugged = true;
+    console.group("🛒 CART ITEM DEBUG — full structure");
+    console.log("Raw item:", JSON.parse(JSON.stringify(item)));
+    console.log("Flattened:", flattenObject(item));
+    console.log("All strings found:", allStrings(item));
+    console.log("color field:", item.color, "| selectedColor:", item.selectedColor,
+                "| variant?.color:", item.variant?.color, "| product?.color:", item.product?.color);
+    console.log("size field:", item.size, "| selectedSize:", item.selectedSize,
+                "| variant?.size:", item.variant?.size, "| product?.size:", item.product?.size);
+    console.log("stockQuantity:", item.stockQuantity, "| product?.stockQuantity:", item.product?.stockQuantity,
+                "| variant:", item.variant);
+    console.groupEnd();
+};
+
+/* ─── Known color names ──────────────────────────────────────── */
+const KNOWN_COLORS = new Set([
+    "BLACK","WHITE","RED","BLUE","GREEN","YELLOW","PURPLE","PINK",
+    "ORANGE","GRAY","GREY","BROWN","NAVY","BEIGE","CREAM","IVORY",
+    "MAROON","TEAL","CYAN","MAGENTA","GOLD","SILVER","KHAKI",
+    "CORAL","SALMON","LAVENDER","MINT","TURQUOISE","INDIGO","VIOLET",
+]);
+
+/** Known size tokens */
+const KNOWN_SIZES = new Set([
+    "XS","S","M","L","XL","XXL","XXXL","2XL","3XL","4XL",
+    "6","7","8","9","10","11","12","13","14",
+    "36","37","38","39","40","41","42","43","44","45",
+    "FREE SIZE","ONE SIZE","FREESIZE","ONESIZE",
+]);
+
+/* ─── Find variant by variantId in product's variants array ───── */
+const findVariantById = (item) => {
+    const vid = item.variantId ?? item.variant?.variantId ?? item.variant?.id ?? null;
+    if (!vid) return null;
+    const variants = item.product?.variants ?? item.variants ?? [];
+    return variants.find(v => (v.variantId ?? v.id) === vid) ?? null;
+};
+
+/* ─── Resolve COLOR ────────────────────────────────────────────── */
+const resolveColor = (item) => {
+    // Pass 1: direct fields (every name we've seen from Spring Boot backends)
+    const v = item.color ?? item.selectedColor ?? item.colorName ?? item.colour ??
+              item.selectedColour ?? item.variantColor ?? item.color_name ??
+              item.variant?.color ?? item.variant?.colorName ?? item.variant?.colour ??
+              item.product?.color ?? item.product?.colorName ?? item.product?.colour ?? null;
+    if (v && String(v).trim()) return String(v).trim();
+
+    // Pass 2: look up by variantId
+    const byId = findVariantById(item);
+    if (byId?.color ?? byId?.colorName) return byId.color ?? byId.colorName;
+
+    // Pass 3: deep scan — any string that matches a known color
+    const strings = allStrings(item);
+    const found = strings.find(s => KNOWN_COLORS.has(s));
+    return found ?? null;
+};
+
+/* ─── Resolve SIZE ─────────────────────────────────────────────── */
+const resolveSize = (item) => {
+    // Pass 1: direct fields
+    const v = item.size ?? item.selectedSize ?? item.sizeName ?? item.sizeValue ??
+              item.variantSize ?? item.size_name ?? item.sizeCode ??
+              item.variant?.size ?? item.variant?.sizeName ?? item.variant?.sizeValue ??
+              item.product?.size ?? item.product?.sizeName ?? null;
+    if (v && String(v).trim()) return String(v).trim();
+
+    // Pass 2: look up by variantId
+    const byId = findVariantById(item);
+    if (byId?.size ?? byId?.sizeName) return byId.size ?? byId.sizeName;
+
+    // Pass 3: deep scan — any string that matches a known size
+    const strings = allStrings(item);
+    const found = strings.find(s => KNOWN_SIZES.has(s));
+    return found ?? null;
+};
+
+/* ─── Resolve STOCK ────────────────────────────────────────────── */
+const resolveStock = (item) => {
+    const color = norm(resolveColor(item));
+    const size  = norm(resolveSize(item));
+
+    // Priority 1: match variant by color+size or by variantId → use its stock
+    const variants = item.variants ?? item.product?.variants ?? item.productVariants ?? [];
+    if (Array.isArray(variants) && variants.length > 0) {
+        let matched = null;
+
+        // Try variantId match first (most reliable)
+        const vid = item.variantId ?? item.variant?.variantId ?? item.variant?.id ?? null;
+        if (vid) matched = variants.find(v => (v.variantId ?? v.id) === vid);
+
+        // Try color+size match
+        if (!matched && color && size) {
+            matched = variants.find(v =>
+                norm(v.color ?? v.colorName) === color &&
+                norm(v.size  ?? v.sizeName)  === size
+            );
+        }
+
+        if (matched) {
+            const s = matched.quantity ?? matched.stock ?? matched.stockQuantity ??
+                      matched.availableQty ?? matched.stockQty ?? null;
+            const n = parseInt(s, 10);
+            if (!isNaN(n)) return n;
+        }
+    }
+
+    // Priority 2: variant sub-object directly on item
+    const vObj = item.variant ?? null;
+    if (vObj) {
+        const s = vObj.quantity ?? vObj.stock ?? vObj.stockQuantity ?? vObj.availableQty ?? null;
+        const n = parseInt(s, 10);
+        if (!isNaN(n)) return n;
+    }
+
+    // Priority 3: item-level stock fields
+    for (const s of [
+        item.stockQuantity, item.stock, item.availableQuantity,
+        item.availableStock, item.inventoryCount, item.remainingStock,
+        item.variantStock, item.variantQuantity,
+    ]) {
+        const n = parseInt(s, 10);
+        if (!isNaN(n)) return n;
+    }
+
+    // Priority 4: product-level
+    for (const s of [
+        item.product?.stockQuantity, item.product?.stock,
+        item.product?.availableQuantity, item.product?.availableStock,
+        item.product?.inventoryCount,
+    ]) {
+        const n = parseInt(s, 10);
+        if (!isNaN(n)) return n;
+    }
+
+    return null;
+};
+
+/* ─── Resolve PRICE fields ─────────────────────────────────────── */
+const resolveUnitPrice = (item) =>
+    parseFloat(item.discountPrice ?? item.unitPrice ?? item.sellingPrice ?? item.price ?? 0);
+
+const resolveOriginalPrice = (item) =>
+    parseFloat(item.sellingPrice ?? item.product?.sellingPrice ?? item.originalPrice ?? item.price ?? 0);
+
+/* ─── Resolve IMAGE url ─────────────────────────────────────────── */
+const resolveImage = (url) => {
+    if (!url) return null;
+    if (url.startsWith("http")) return url;
+    return `${API}${url.startsWith("/") ? url : `/${url}`}`;
+};
+
+/* ─── COLOR_HEX map for known colors ───────────────────────────── */
+const COLOR_HEX = {
+    BLACK:"#000000", WHITE:"#FFFFFF", RED:"#EF4444", BLUE:"#3B82F6",
+    GREEN:"#22C55E", YELLOW:"#EAB308", PURPLE:"#A855F7", PINK:"#EC4899",
+    ORANGE:"#F97316", GRAY:"#6B7280", GREY:"#6B7280", BROWN:"#92400E",
+    NAVY:"#1E3A5F", BEIGE:"#D4A76A", CREAM:"#FFFDD0", IVORY:"#FFFFF0",
+    MAROON:"#800000", TEAL:"#008080", CYAN:"#00BCD4", GOLD:"#FFD700",
+    SILVER:"#C0C0C0", KHAKI:"#C3B091", CORAL:"#FF7F7F", LAVENDER:"#E6E6FA",
+    MINT:"#98FF98", TURQUOISE:"#40E0D0", INDIGO:"#4B0082", VIOLET:"#EE82EE",
 };
 
 /* ─── Google Fonts ───────────────────────────────────────────── */
@@ -72,9 +266,9 @@ if (!document.head.querySelector('link[href*="Playfair"]')) {
     l.href  = "https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400;1,700&family=IBM+Plex+Mono:wght@300;400;500;600&display=swap";
     document.head.appendChild(l);
 }
-if (!document.head.querySelector("#cart-v4")) {
+if (!document.head.querySelector("#cart-v5")) {
     const s = document.createElement("style");
-    s.id = "cart-v4";
+    s.id = "cart-v5";
     s.textContent = `
         @keyframes cFadeIn { from{opacity:0;transform:translateY(14px)} to{opacity:1;transform:translateY(0)} }
         @keyframes cItemIn  { from{opacity:0;transform:translateX(-10px)} to{opacity:1;transform:translateX(0)} }
@@ -95,12 +289,6 @@ const bwTheme = createTheme({
     typography: { fontFamily: "'IBM Plex Mono', monospace" },
 });
 
-const resolveImage = (url) => {
-    if (!url) return null;
-    if (url.startsWith("http")) return url;
-    return `${API}${url.startsWith("/") ? url : `/${url}`}`;
-};
-
 const MonoLabel = ({ children, sx = {} }) => (
     <Typography sx={{
         fontFamily: "'IBM Plex Mono', monospace",
@@ -114,27 +302,33 @@ const MonoLabel = ({ children, sx = {} }) => (
 
 /* ─── Cart Item Row ──────────────────────────────────────────── */
 const CartItem = ({ item, index, onIncrease, onDecrease, onRemove, onNavigate }) => {
-    /* Field normalisation — CartDTO items may nest product inside .product */
-    const productId     = item.productId   ?? item.product?.productId;
-    const productName   = item.productName ?? item.product?.productName ?? item.name;
-    const imageUrl      = item.imageUrl    ?? item.product?.imageUrl;
-    const category      = item.categoryName ?? item.product?.categoryName;
+    // 🔍 Logs full item structure to browser console (first item only, one time)
+    debugCartItem(item);
 
-    /* Price: prefer discountPrice → unitPrice → sellingPrice → price */
-    const unitPrice     = parseFloat(item.discountPrice ?? item.unitPrice ?? item.sellingPrice ?? item.price ?? 0);
-    const originalPrice = parseFloat(item.sellingPrice  ?? item.product?.sellingPrice ?? item.price ?? 0);
+    const productId   = item.productId   ?? item.product?.productId;
+    const productName = item.productName ?? item.product?.productName ?? item.name ?? "Product";
+    const imageUrl    = item.imageUrl    ?? item.product?.imageUrl ?? item.image ?? item.product?.image;
+    const category    = item.categoryName ?? item.product?.categoryName;
+
+    const unitPrice     = resolveUnitPrice(item);
+    const originalPrice = resolveOriginalPrice(item);
     const discount      = item.discount ?? item.product?.discount;
     const hasDiscount   = discount && parseFloat(discount) > 0 && unitPrice < originalPrice;
 
-    const qty      = item.quantity ?? 1;
-    const stockQty = item.stockQuantity ?? item.product?.stockQuantity ?? 9999;
-    const isAtMax  = qty >= stockQty;
-    const isOver   = qty > stockQty;
+    const qty     = item.quantity ?? 1;
+    const stock   = resolveStock(item);       // null = unknown
+    const hasStock = stock !== null;
+    const isAtMax  = hasStock && qty >= stock;
+    const isOver   = hasStock && qty > stock;
 
-    const color = item.color ?? item.selectedColor;
-    const size  = item.size  ?? item.selectedSize;
+    const color = resolveColor(item);
+    const size  = resolveSize(item);
 
-    /* cartItemId — the PK used by the backend */
+    // Color swatch hex — use map or fall back to CSS color name
+    const colorKey  = norm(color);
+    const colorHex  = colorKey ? (COLOR_HEX[colorKey] ?? color?.toLowerCase()) : null;
+    const isLight   = colorKey === "WHITE" || colorKey === "IVORY" || colorKey === "CREAM" || colorKey === "BEIGE";
+
     const cartItemId = item.cartItemId ?? item.id ?? item.cartId;
 
     return (
@@ -146,7 +340,7 @@ const CartItem = ({ item, index, onIncrease, onDecrease, onRemove, onNavigate })
             transition: "border-color 0.2s, box-shadow 0.2s",
             "&:hover": { borderColor: isOver ? "#e53935" : "#000", boxShadow: "0 4px 20px rgba(0,0,0,0.06)" },
         }}>
-            {/* Over-stock warning */}
+            {/* Over-stock warning banner */}
             {isOver && (
                 <Box sx={{ backgroundColor: "#e53935", px: 2, py: 0.8 }}>
                     <Typography sx={{
@@ -154,19 +348,19 @@ const CartItem = ({ item, index, onIncrease, onDecrease, onRemove, onNavigate })
                         fontSize: 9, fontWeight: 600, letterSpacing: "0.1em",
                         textTransform: "uppercase", color: "#fff",
                     }}>
-                        ⚠ Only {stockQty} in stock — please reduce quantity
+                        ⚠ Only {stock} in stock — reducing automatically…
                     </Typography>
                 </Box>
             )}
 
             <Grid container alignItems="stretch">
 
-                {/* Image */}
+                {/* ── Image ── */}
                 <Grid item xs={3} sm={2}>
                     <Box
                         onClick={() => productId && onNavigate(productId)}
                         sx={{
-                            height: 140, overflow: "hidden",
+                            height: 150, overflow: "hidden",
                             cursor: "pointer", backgroundColor: "#f5f5f0",
                             borderRight: "1px solid #e8e8e8",
                         }}
@@ -194,70 +388,87 @@ const CartItem = ({ item, index, onIncrease, onDecrease, onRemove, onNavigate })
                                     fontWeight: 900, fontStyle: "italic",
                                     fontSize: 36, color: "rgba(0,0,0,0.08)",
                                 }}>
-                                    {productName?.[0]}
+                                    {productName?.[0]?.toUpperCase()}
                                 </Typography>
                             </Box>
                         )}
                     </Box>
                 </Grid>
 
-                {/* Info */}
+                {/* ── Product info ── */}
                 <Grid item xs={9} sm={5}>
                     <Box sx={{ p: { xs: 1.5, sm: 2 } }}>
+                        {/* Category */}
+                        {category && (
+                            <MonoLabel sx={{ mb: 0.5, color: "#bbb" }}>{category}</MonoLabel>
+                        )}
+
+                        {/* Name */}
                         <Typography
                             onClick={() => productId && onNavigate(productId)}
                             sx={{
                                 fontFamily: "'IBM Plex Mono', monospace",
                                 fontWeight: 600, fontSize: { xs: 11, sm: 12 },
                                 letterSpacing: "0.05em", textTransform: "uppercase",
-                                color: "#000", cursor: "pointer", mb: 0.8,
+                                color: "#000", cursor: "pointer", mb: 1.2,
+                                lineHeight: 1.4,
                                 "&:hover": { textDecoration: "underline" },
                             }}
                         >
                             {productName}
                         </Typography>
 
-                        {category && <MonoLabel sx={{ mb: 1 }}>{category}</MonoLabel>}
-
-                        {/* Variant chips */}
+                        {/* ── Variant chips (color + size) ────────────────── */}
                         {(color || size) && (
-                            <Box sx={{ display: "flex", gap: 0.8, mt: 1, flexWrap: "wrap" }}>
+                            <Box sx={{ display: "flex", gap: 0.8, mb: 1.5, flexWrap: "wrap" }}>
                                 {color && (
                                     <Box sx={{
-                                        display: "flex", alignItems: "center", gap: 0.6,
-                                        border: "1px solid #e0e0e0", px: 1, py: 0.3,
+                                        display: "flex", alignItems: "center", gap: 0.7,
+                                        border: "1px solid #e0e0e0",
+                                        backgroundColor: "#fafafa",
+                                        px: 1.2, py: 0.4,
                                     }}>
+                                        {/* Color swatch */}
                                         <Box sx={{
-                                            width: 10, height: 10, borderRadius: "50%",
-                                            backgroundColor: ["white","beige","cream","ivory"]
-                                                .includes(color.toLowerCase()) ? "#f0f0f0" : color.toLowerCase(),
-                                            border: "1px solid rgba(0,0,0,0.15)",
+                                            width: 11, height: 11,
+                                            borderRadius: "50%",
+                                            backgroundColor: colorHex ?? "#ccc",
+                                            border: isLight
+                                                ? "1.5px solid #ccc"
+                                                : "1.5px solid rgba(0,0,0,0.12)",
+                                            flexShrink: 0,
                                         }} />
                                         <Typography sx={{
                                             fontFamily: "'IBM Plex Mono', monospace",
-                                            fontSize: 9, letterSpacing: "0.08em",
-                                            textTransform: "uppercase", color: "#666",
+                                            fontSize: 9, letterSpacing: "0.1em",
+                                            textTransform: "uppercase", color: "#333",
+                                            fontWeight: 600,
                                         }}>
                                             {color}
                                         </Typography>
                                     </Box>
                                 )}
                                 {size && (
-                                    <Box sx={{ border: "1px solid #e0e0e0", px: 1, py: 0.3 }}>
+                                    <Box sx={{
+                                        border: "1px solid #e0e0e0",
+                                        backgroundColor: "#fafafa",
+                                        px: 1.2, py: 0.4,
+                                    }}>
                                         <Typography sx={{
                                             fontFamily: "'IBM Plex Mono', monospace",
-                                            fontSize: 9, letterSpacing: "0.08em",
-                                            textTransform: "uppercase", color: "#666",
+                                            fontSize: 9, letterSpacing: "0.1em",
+                                            textTransform: "uppercase", color: "#333",
+                                            fontWeight: 600,
                                         }}>
-                                            Size: {size}
+                                            {size}
                                         </Typography>
                                     </Box>
                                 )}
                             </Box>
                         )}
 
-                        {/* Price */}
-                        <Box sx={{ mt: 1.5 }}>
+                        {/* ── Price ── */}
+                        <Box>
                             {hasDiscount ? (
                                 <Box sx={{ display: "flex", alignItems: "baseline", gap: 1, flexWrap: "wrap" }}>
                                     <Typography sx={{
@@ -291,21 +502,39 @@ const CartItem = ({ item, index, onIncrease, onDecrease, onRemove, onNavigate })
                             )}
                         </Box>
 
-                        {/* Low stock warning (only if not already over) */}
-                        {!isOver && stockQty > 0 && stockQty <= 5 && (
-                            <Typography sx={{
-                                fontFamily: "'IBM Plex Mono', monospace",
-                                fontSize: 9, letterSpacing: "0.08em",
-                                color: "#e53935", mt: 0.6,
-                                animation: "cPulse 2s ease infinite",
-                            }}>
-                                ⚠ Only {stockQty} left in stock
-                            </Typography>
-                        )}
+                        {/* ── Stock badge ── */}
+                        <Box sx={{ mt: 1 }}>
+                            {!hasStock ? (
+                                <MonoLabel sx={{ color: "#ccc" }}>Stock info unavailable</MonoLabel>
+                            ) : stock === 0 ? (
+                                <Typography sx={{
+                                    fontFamily: "'IBM Plex Mono', monospace", fontSize: 9,
+                                    letterSpacing: "0.08em", color: "#e53935",
+                                    animation: "cPulse 2s ease infinite",
+                                }}>
+                                    ✕ Out of stock
+                                </Typography>
+                            ) : stock <= 5 ? (
+                                <Typography sx={{
+                                    fontFamily: "'IBM Plex Mono', monospace", fontSize: 9,
+                                    letterSpacing: "0.08em", color: "#e68a00",
+                                    animation: "cPulse 2.5s ease infinite",
+                                }}>
+                                    ⚠ Only {stock} left in stock
+                                </Typography>
+                            ) : (
+                                <Typography sx={{
+                                    fontFamily: "'IBM Plex Mono', monospace", fontSize: 9,
+                                    letterSpacing: "0.08em", color: "#4caf50",
+                                }}>
+                                    ✓ {stock} in stock
+                                </Typography>
+                            )}
+                        </Box>
                     </Box>
                 </Grid>
 
-                {/* Quantity stepper */}
+                {/* ── Quantity stepper ── */}
                 <Grid item xs={6} sm={3}>
                     <Box sx={{
                         height: "100%",
@@ -316,29 +545,30 @@ const CartItem = ({ item, index, onIncrease, onDecrease, onRemove, onNavigate })
                         p: 2, gap: 0.5,
                     }}>
                         <MonoLabel>Qty</MonoLabel>
-                        <Box sx={{ display: "flex", alignItems: "center", border: "1px solid #e0e0e0", mt: 0.5 }}>
+                        <Box sx={{ display: "flex", alignItems: "center", border: "2px solid #000", mt: 0.5 }}>
                             {/* − */}
                             <Box
                                 onClick={() => qty > 1 && onDecrease(cartItemId, qty)}
                                 sx={{
-                                    width: 32, height: 32,
+                                    width: 34, height: 34,
                                     display: "flex", alignItems: "center", justifyContent: "center",
                                     cursor: qty <= 1 ? "not-allowed" : "pointer",
                                     color: qty <= 1 ? "#ddd" : "#000",
-                                    borderRight: "1px solid #e0e0e0",
+                                    borderRight: "2px solid #000",
                                     "&:hover": qty > 1 ? { backgroundColor: "#000", color: "#fff" } : {},
                                     transition: "all 0.15s",
                                 }}
                             >
-                                <Remove sx={{ fontSize: 12 }} />
+                                <Remove sx={{ fontSize: 13 }} />
                             </Box>
 
                             {/* count */}
                             <Typography sx={{
                                 fontFamily: "'Playfair Display', serif",
-                                fontWeight: 700, fontSize: 16,
-                                minWidth: 36, textAlign: "center", lineHeight: 1,
+                                fontWeight: 700, fontSize: 18,
+                                minWidth: 40, textAlign: "center", lineHeight: 1,
                                 color: isOver ? "#e53935" : "#000",
+                                px: 1,
                             }}>
                                 {qty}
                             </Typography>
@@ -347,30 +577,41 @@ const CartItem = ({ item, index, onIncrease, onDecrease, onRemove, onNavigate })
                             <Box
                                 onClick={() => !isAtMax && onIncrease(cartItemId, qty)}
                                 sx={{
-                                    width: 32, height: 32,
+                                    width: 34, height: 34,
                                     display: "flex", alignItems: "center", justifyContent: "center",
                                     cursor: isAtMax ? "not-allowed" : "pointer",
-                                    color: isAtMax ? "#ddd" : "#000",
-                                    borderLeft: "1px solid #e0e0e0",
+                                    color: isAtMax ? "#ccc" : "#000",
+                                    borderLeft: "2px solid #000",
                                     "&:hover": !isAtMax ? { backgroundColor: "#000", color: "#fff" } : {},
                                     transition: "all 0.15s",
                                 }}
                             >
-                                <Add sx={{ fontSize: 12 }} />
+                                <Add sx={{ fontSize: 13 }} />
                             </Box>
                         </Box>
 
+                        {/* Stock availability label */}
                         <Typography sx={{
                             fontFamily: "'IBM Plex Mono', monospace",
-                            fontSize: 8, mt: 0.5, letterSpacing: "0.06em",
-                            color: isAtMax ? "#e53935" : "#ccc",
+                            fontSize: 8, mt: 0.6, letterSpacing: "0.06em",
+                            color: !hasStock
+                                ? "#ccc"
+                                : isAtMax
+                                    ? "#e53935"
+                                    : stock <= 5
+                                        ? "#e68a00"
+                                        : "#888",
                         }}>
-                            {isAtMax ? "Max stock reached" : `${stockQty} available`}
+                            {!hasStock
+                                ? ""
+                                : isAtMax
+                                    ? "Max stock reached"
+                                    : `${stock - qty} more available`}
                         </Typography>
                     </Box>
                 </Grid>
 
-                {/* Line total + delete */}
+                {/* ── Line total + delete ── */}
                 <Grid item xs={6} sm={2}>
                     <Box sx={{
                         height: "100%",
@@ -391,7 +632,7 @@ const CartItem = ({ item, index, onIncrease, onDecrease, onRemove, onNavigate })
                         <Box
                             onClick={() => onRemove(cartItemId, productName)}
                             sx={{
-                                mt: 1, width: 28, height: 28,
+                                mt: 1, width: 30, height: 30,
                                 display: "flex", alignItems: "center", justifyContent: "center",
                                 border: "1px solid #e0e0e0", cursor: "pointer", color: "#ccc",
                                 "&:hover": { backgroundColor: "#e53935", color: "#fff", borderColor: "#e53935" },
@@ -420,7 +661,49 @@ const Cart = () => {
 
     useEffect(() => { loadCart(); }, []);
 
-    /* ── GET /api/cart/customer/{cid} ── */
+    /* ── Auto-reduce items whose qty exceeds their variant stock ── */
+    const autoReduceOverstock = async (items) => {
+        const cid = getCid();
+        const overcrowded = items.filter(item => {
+            const stock = resolveStock(item);
+            return stock !== null && (item.quantity ?? 1) > stock;
+        });
+
+        if (overcrowded.length === 0) return items;
+
+        showToast(
+            `${overcrowded.length} item${overcrowded.length > 1 ? "s" : ""} exceeded stock — quantities adjusted automatically.`,
+            "warning"
+        );
+
+        const results = await Promise.allSettled(
+            overcrowded.map(item => {
+                const cartItemId = item.cartItemId ?? item.id ?? item.cartId;
+                const stock      = resolveStock(item);
+                return cartUpdateQty(cid, cartItemId, stock);
+            })
+        );
+
+        let latestItems = items;
+        results.forEach((result, idx) => {
+            if (result.status === "fulfilled") {
+                latestItems = unpackCart(result.value.data);
+            } else {
+                const item       = overcrowded[idx];
+                const cartItemId = item.cartItemId ?? item.id ?? item.cartId;
+                const stock      = resolveStock(item);
+                latestItems = latestItems.map(i =>
+                    (i.cartItemId ?? i.id ?? i.cartId) === cartItemId
+                        ? { ...i, quantity: stock }
+                        : i
+                );
+            }
+        });
+
+        return latestItems;
+    };
+
+    /* ── GET cart ── */
     const loadCart = async () => {
         const cid = getCid();
         if (!cid) {
@@ -429,11 +712,11 @@ const Cart = () => {
             return;
         }
         try {
-            const res   = await cartGet(cid);
-            const items = unpackCart(res.data);
-            setCart(items);
+            const res        = await cartGet(cid);
+            const rawItems   = unpackCart(res.data);
+            const finalItems = await autoReduceOverstock(rawItems);
+            setCart(finalItems);
             setError(null);
-            /* Dispatch so Navbar badge re-reads cartService if it's wired that way */
             window.dispatchEvent(new Event("cartUpdated"));
         } catch (err) {
             console.error("Load cart failed:", err);
@@ -443,19 +726,20 @@ const Cart = () => {
         }
     };
 
-    /* ── PUT /api/cart/customer/{cid}/item/{cartItemId}?quantity=N ── */
+    /* ── PUT increase ── */
     const handleIncrease = async (cartItemId, currentQty) => {
-        const item     = cart.find(i => (i.cartItemId ?? i.id ?? i.cartId) === cartItemId);
-        const stockQty = item?.stockQuantity ?? item?.product?.stockQuantity ?? 9999;
+        const item  = cart.find(i => (i.cartItemId ?? i.id ?? i.cartId) === cartItemId);
+        const stock = resolveStock(item);
 
-        if (currentQty >= stockQty) {
-            showToast(`Only ${stockQty} units available in stock`, "warning");
+        if (stock !== null && currentQty >= stock) {
+            showToast(`Only ${stock} units available in stock`, "warning");
             return;
         }
         try {
-            const res   = await cartUpdateQty(getCid(), cartItemId, currentQty + 1);
-            const items = unpackCart(res.data);
-            setCart(items);
+            const res        = await cartUpdateQty(getCid(), cartItemId, currentQty + 1);
+            const rawItems   = unpackCart(res.data);
+            const finalItems = await autoReduceOverstock(rawItems);
+            setCart(finalItems);
             window.dispatchEvent(new Event("cartUpdated"));
         } catch (err) {
             console.error("Increase qty failed:", err);
@@ -463,12 +747,14 @@ const Cart = () => {
         }
     };
 
+    /* ── PUT decrease ── */
     const handleDecrease = async (cartItemId, currentQty) => {
         if (currentQty <= 1) return;
         try {
-            const res   = await cartUpdateQty(getCid(), cartItemId, currentQty - 1);
-            const items = unpackCart(res.data);
-            setCart(items);
+            const res        = await cartUpdateQty(getCid(), cartItemId, currentQty - 1);
+            const rawItems   = unpackCart(res.data);
+            const finalItems = await autoReduceOverstock(rawItems);
+            setCart(finalItems);
             window.dispatchEvent(new Event("cartUpdated"));
         } catch (err) {
             console.error("Decrease qty failed:", err);
@@ -476,14 +762,15 @@ const Cart = () => {
         }
     };
 
-    /* ── DELETE /api/cart/customer/{cid}/item/{cartItemId} ── */
+    /* ── DELETE item ── */
     const handleRemove = async (cartItemId, name) => {
         setRemoving(cartItemId);
         try {
-            const res   = await cartDeleteItem(getCid(), cartItemId);
-            const items = unpackCart(res.data);
+            const res        = await cartDeleteItem(getCid(), cartItemId);
+            const rawItems   = unpackCart(res.data);
+            const finalItems = await autoReduceOverstock(rawItems);
             setTimeout(() => {
-                setCart(items);
+                setCart(finalItems);
                 setRemoving(null);
                 window.dispatchEvent(new Event("cartUpdated"));
             }, 260);
@@ -494,10 +781,10 @@ const Cart = () => {
         }
     };
 
-    /* ── DELETE /api/cart/customer/{cid}/clear ── */
+    /* ── DELETE clear ── */
     const handleClearCart = async () => {
         try {
-            await cartClear(getCid());       /* returns 204, no body */
+            await cartClear(getCid());
             setCart([]);
             window.dispatchEvent(new Event("cartUpdated"));
         } catch (err) {
@@ -507,12 +794,7 @@ const Cart = () => {
     };
 
     /* ── Totals ── */
-    const subtotal = cart.reduce((t, item) => {
-        const price = parseFloat(item.discountPrice ?? item.unitPrice ?? item.sellingPrice ?? item.price ?? 0);
-        return t + price * (item.quantity ?? 1);
-    }, 0);
-    const tax   = subtotal * 0;
-    const total = subtotal + tax;
+    const subtotal = cart.reduce((t, item) => t + resolveUnitPrice(item) * (item.quantity ?? 1), 0);
 
     /* ── Loading ── */
     if (loading) return (
@@ -668,7 +950,6 @@ const Cart = () => {
                         </Box>
 
                         <Box sx={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
-                            {/* Item count badge */}
                             <Box sx={{
                                 border: "1px solid #000", px: 2, py: 0.8,
                                 display: "flex", alignItems: "center", gap: 1.5,
@@ -688,7 +969,6 @@ const Cart = () => {
                                 </Typography>
                             </Box>
 
-                            {/* Clear all */}
                             <Box onClick={handleClearCart} sx={{
                                 display: "flex", alignItems: "center", gap: 1,
                                 border: "1px solid #e0e0e0", px: 2, py: 0.8, cursor: "pointer",
@@ -711,7 +991,6 @@ const Cart = () => {
 
                         {/* ── Items list ── */}
                         <Grid item xs={12} md={8} sx={{ animation: "cFadeIn 0.4s 0.1s ease both" }}>
-                            {/* Column headers */}
                             <Box sx={{
                                 display: { xs: "none", sm: "grid" },
                                 gridTemplateColumns: "calc(16.67%) calc(41.67%) calc(25%) calc(16.67%)",
@@ -777,22 +1056,18 @@ const Cart = () => {
                                 </Box>
 
                                 <Box sx={{ p: 3 }}>
-                                    {[
-                                        { label: `Subtotal (${cart.length} item${cart.length !== 1 ? "s" : ""})`, value: subtotal },
-                                    ].map(({ label, value }) => (
-                                        <Box key={label} sx={{
-                                            display: "flex", justifyContent: "space-between",
-                                            alignItems: "baseline", mb: 1.5,
+                                    <Box sx={{
+                                        display: "flex", justifyContent: "space-between",
+                                        alignItems: "baseline", mb: 1.5,
+                                    }}>
+                                        <MonoLabel>{`Subtotal (${cart.length} item${cart.length !== 1 ? "s" : ""})`}</MonoLabel>
+                                        <Typography sx={{
+                                            fontFamily: "'IBM Plex Mono', monospace",
+                                            fontSize: 13, color: "#444",
                                         }}>
-                                            <MonoLabel>{label}</MonoLabel>
-                                            <Typography sx={{
-                                                fontFamily: "'IBM Plex Mono', monospace",
-                                                fontSize: 13, color: "#444",
-                                            }}>
-                                                Rs {value.toFixed(2)}
-                                            </Typography>
-                                        </Box>
-                                    ))}
+                                            Rs {subtotal.toFixed(2)}
+                                        </Typography>
+                                    </Box>
 
                                     <Box sx={{ borderTop: "1px solid #000", my: 2.5 }} />
 
@@ -805,7 +1080,7 @@ const Cart = () => {
                                             fontFamily: "'Playfair Display', serif",
                                             fontWeight: 700, fontSize: 28, color: "#000", lineHeight: 1,
                                         }}>
-                                            Rs {total.toFixed(2)}
+                                            Rs {subtotal.toFixed(2)}
                                         </Typography>
                                     </Box>
 
@@ -825,7 +1100,6 @@ const Cart = () => {
                                         <ArrowForward sx={{ fontSize: 15 }} />
                                     </Box>
 
-                                    {/* Free shipping progress */}
                                     {subtotal < 5000 ? (
                                         <Box sx={{ mt: 2, p: 1.5, backgroundColor: "#f5f5f0", border: "1px solid #e8e8e8" }}>
                                             <Typography sx={{
