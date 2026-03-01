@@ -8,6 +8,8 @@ import {
     Category,
     AccountTree,
     ShoppingCart,
+    LocalShipping,
+
 } from "@mui/icons-material";
 import { useState, useEffect } from "react";
 import Navbar from "../components/Navbar";
@@ -18,7 +20,8 @@ import PurchaseOrder from "../components/admin/PurchaseOrder";
 import productService from "../services/productService";
 import categoryService from "../services/categoryService";
 import subCategoryService from "../services/subCategoryService";
-
+import OrderManagement from "../components/admin/OrderManagement";
+import orderService from "../services/orderService";
 /* ─── Google Fonts ───────────────────────────────────────────── */
 const fontLink = document.createElement("link");
 fontLink.rel = "stylesheet";
@@ -91,9 +94,18 @@ const SECTIONS = [
     },
     {
         id: 3,
+        label:    "Orders",
+        shortLabel: "ORD",
+        roman:    "IV",
+        icon:     LocalShipping,
+        countKey: "orders",
+        desc:     "Customer orders & tracking",
+    },
+    {
+        id: 4,
         label:    "Purchase Orders",
         shortLabel: "PO",
-        roman:    "IV",
+        roman:    "V",
         icon:     ShoppingCart,
         countKey: "purchaseOrders",
         desc:     "Procurement ledger",
@@ -102,9 +114,9 @@ const SECTIONS = [
 
 const TICKER_TEXT = [
     "PRODUCTS", "·", "CATEGORIES", "·", "SUB CATEGORIES", "·",
-    "PURCHASE ORDERS", "·", "ADMIN DASHBOARD", "·",
+    "ORDERS", "·", "PURCHASE ORDERS", "·", "ADMIN DASHBOARD", "·",
     "PRODUCTS", "·", "CATEGORIES", "·", "SUB CATEGORIES", "·",
-    "PURCHASE ORDERS", "·", "ADMIN DASHBOARD", "·",
+    "ORDERS", "·", "PURCHASE ORDERS", "·", "ADMIN DASHBOARD", "·",
 ].join("  ");
 
 /* ─── Ticker ─────────────────────────────────────────────────── */
@@ -246,22 +258,26 @@ const NavItem = ({ section, active, onClick, count }) => {
 const AdminDashboard = () => {
     const [currentTab, setCurrentTab] = useState(0);
     const [counts, setCounts] = useState({
-        products: 0, categories: 0,
+        products: 0, categories: 0,orders: 0,
         subCategories: 0, purchaseOrders: 0,
     });
 
     useEffect(() => {
         const fetchCounts = async () => {
-            const [products, categories, subCategories] = await Promise.allSettled([
+            const [products, categories, subCategories, orders] = await Promise.allSettled([
                 productService.getAllProducts(),
                 categoryService.getAllCategories(),
                 subCategoryService.getAllSubCategories(),
+                orderService.getAllOrders(),
+
             ]);
             setCounts(prev => ({
                 ...prev,
                 products:      products.status      === "fulfilled" ? products.value.length      : 0,
                 categories:    categories.status    === "fulfilled" ? categories.value.length    : 0,
                 subCategories: subCategories.status === "fulfilled" ? subCategories.value.length : 0,
+                orders:        orders.status        === "fulfilled" ? orders.value.length        : 0,
+
             }));
         };
         fetchCounts();
@@ -271,6 +287,8 @@ const AdminDashboard = () => {
         <ProductList />,
         <CategoryManagement />,
         <SubCategoryManagement />,
+        <OrderManagement />,
+
         <PurchaseOrder />,
     ];
 

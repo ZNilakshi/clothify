@@ -121,30 +121,7 @@ const SectionHeader = ({ eyebrow, title, count, align = "left", inverted = false
                 {title}
             </Typography>
         </Box>
-        {count !== undefined && (
-            <Box sx={{
-                border: "1px solid",
-                borderColor: inverted ? "#444" : "#000",
-                px: 2.5, py: 1,
-                display: "flex", alignItems: "baseline", gap: 1.5,
-                flexShrink: 0,
-            }}>
-                <Typography sx={{
-                    fontFamily: "'Playfair Display', serif",
-                    fontWeight: 900, fontSize: 28, lineHeight: 1,
-                    color: inverted ? "#fff" : "#000",
-                }}>
-                    {String(count).padStart(2, "0")}
-                </Typography>
-                <Typography sx={{
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase",
-                    color: inverted ? "rgba(255,255,255,0.4)" : "#aaa",
-                }}>
-                    items
-                </Typography>
-            </Box>
-        )}
+        
     </Box>
 );
 
@@ -285,8 +262,22 @@ const Home = () => {
             <Box sx={{ mt: 3 }}>
                 <MarqueeStrip items={MARQUEE_ITEMS} speed={30} />
             </Box>
-
-            {/* ══ SUBCATEGORIES SECTION ═════════════════════════ */}
+{/* ══ CATEGORIES SECTION ════════════════════════════ */}
+{!loading && categories.length > 0 && (
+    <Box
+        className="home-section"
+        sx={{ animationDelay: "0.05s" }}
+    >
+        <Container maxWidth="xl" sx={{ pt: 8, pb: 0 }}>
+          
+        </Container>
+        <CategorySection
+            categories={categories}
+            getImageUrl={getImageUrl}
+        />
+    </Box>
+)}
+            {/* ══ SUBCATEGORIES 
             {!loading && subCategories.length > 0 && (
                 <Box
                     className="home-section"
@@ -299,11 +290,7 @@ const Home = () => {
                     }}
                 >
                     <Container maxWidth="xl" sx={{ py: 6 }}>
-                        <SectionHeader
-                            eyebrow="Browse by"
-                            title="Categories"
-                            count={subCategories.length}
-                        />
+                      
                         <SubCategorySection
                             subCategories={subCategories}
                             getImageUrl={getImageUrl}
@@ -311,6 +298,7 @@ const Home = () => {
                     </Container>
                 </Box>
             )}
+            SECTION ═════════════════════════ */}
 
             {/* ══ INVERTED MARQUEE ══════════════════════════════ */}
             <MarqueeStrip items={MARQUEE_ITEMS.slice().reverse()} speed={24} inverted />

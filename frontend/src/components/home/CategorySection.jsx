@@ -1,180 +1,162 @@
 import React from 'react';
-import { Box, Typography, Stack } from "@mui/material";
+import { Box, Typography } from "@mui/material";
 import { useNavigate } from "react-router-dom";
+
+if (!document.head.querySelector('link[href*="Playfair"]')) {
+    const l = document.createElement("link");
+    l.rel  = "stylesheet";
+    l.href = "https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400;1,700;1,900&family=IBM+Plex+Mono:wght@300;400;500;600&display=swap";
+    document.head.appendChild(l);
+}
+if (!document.head.querySelector("#cat-styles")) {
+    const s = document.createElement("style");
+    s.id = "cat-styles";
+    s.textContent = `
+        @keyframes catFadeUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+        .cat-card { animation: catFadeUp 0.6s ease both; }
+        .cat-card:hover .cat-img {
+            transform: scale(1.06) !important;
+            filter: grayscale(0%) brightness(0.5) !important;
+        }
+        .cat-card:hover .cat-label { letter-spacing: 0.32em !important; }
+        .cat-card:hover .cat-line  { width: 56px !important; }
+        .cat-card:hover .cat-arrow { opacity: 1 !important; transform: translateX(0) !important; }
+        .cat-card:active { transform: scale(0.985) !important; }
+    `;
+    document.head.appendChild(s);
+}
 
 const CategorySection = ({ categories, getImageUrl }) => {
     const navigate = useNavigate();
 
-    const handleCategoryClick = (categoryId) => {
-        navigate(`/category/${categoryId}`);
-    };
-
     return (
-        <Box
-            sx={{
-                minHeight: "100vh",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                backgroundColor: "#000000",
-                padding: "40px 20px",
-            }}
-        >
-            {/* Header */}
-            <Box sx={{ position: "absolute", top: 40, left: 60 }}>
-                <Typography
-                    sx={{
-                        color: "#fff",
-                        fontSize: "0.75rem",
-                        letterSpacing: "0.3em",
-                        textTransform: "uppercase",
-                        opacity: 0.4,
-                    }}
-                >
-                    Browse Collection
-                </Typography>
-            </Box>
-
-            <Stack
-                direction="row"
-                spacing={3}
-                sx={{
-                    width: "100%",
-                    maxWidth: "1400px",
-                    justifyContent: "center",
-                    alignItems: "center",
-                }}
-            >
+        <Box sx={{
+            backgroundColor: "#000",
+            px: { xs: 1.5, sm: 3, md: 4 },
+            pb: { xs: 4, md: 6 },
+        }}>
+            {/* Grid: 1 col on xs, 2 cols on sm+ */}
+            <Box sx={{
+                display: "grid",
+                gridTemplateColumns: { xs: "1fr", sm: "repeat(2, 1fr)" },
+                gap: { xs: 1.5, sm: 2, md: 3 },
+                maxWidth: "1400px",
+                mx: "auto",
+            }}>
                 {categories.slice(0, 2).map((category, index) => (
                     <Box
                         key={category.categoryId}
-                        onClick={() => handleCategoryClick(category.categoryId)}
+                        className="cat-card"
+                        onClick={() => navigate(`/category/${category.categoryId}`)}
                         sx={{
+                            animationDelay: `${index * 0.12}s`,
                             position: "relative",
-                            width: "580px",
-                            height: "720px",
-                            flexShrink: 0,
-                            borderRadius: "4px",
+                            /* Tall on mobile, fixed on desktop */
+                            height: { xs: "60vw", sm: "55vw", md: "680px" },
+                            maxHeight: { md: "720px" },
                             overflow: "hidden",
                             cursor: "pointer",
-                            border: "1px solid rgba(255,255,255,0.08)",
-                            transition: "all 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94)",
+                            border: "1px solid rgba(255,255,255,0.07)",
+                            transition: "border-color 0.4s ease, box-shadow 0.4s ease",
                             "&:hover": {
-                                border: "1px solid rgba(255,255,255,0.3)",
-                                boxShadow: "0 30px 80px rgba(0,0,0,0.8)",
-                                transform: "translateY(-6px)",
-                            },
-                            "&:hover img": {
-                                transform: "scale(1.06)",
-                                filter: "grayscale(0%) brightness(0.55)",
-                            },
-                            "&:hover .category-label": {
-                                letterSpacing: "0.35em",
-                            },
-                            "&:hover .category-line": {
-                                width: "60px",
-                            },
-                            "&:active": {
-                                transform: "translateY(-2px)",
+                                borderColor: "rgba(255,255,255,0.28)",
+                                boxShadow: "0 24px 64px rgba(0,0,0,0.8)",
                             },
                         }}
                     >
-                        {/* Background Image — fixed grayscale */}
+                        {/* Image */}
                         <Box
                             component="img"
+                            className="cat-img"
                             src={getImageUrl(category.imageUrl)}
                             alt={category.categoryName}
                             sx={{
                                 width: "100%",
                                 height: "100%",
                                 objectFit: "cover",
+                                display: "block",
                                 filter: "grayscale(100%) brightness(0.45)",
                                 transition: "transform 0.7s ease, filter 0.5s ease",
                             }}
                         />
 
-                        {/* Gradient Overlay */}
-                        <Box
-                            sx={{
-                                position: "absolute",
-                                inset: 0,
-                                background:
-                                    "linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.1) 50%, transparent 100%)",
-                            }}
-                        />
+                        {/* Gradient */}
+                        <Box sx={{
+                            position: "absolute", inset: 0,
+                            background: "linear-gradient(to top, rgba(0,0,0,0.88) 0%, rgba(0,0,0,0.1) 55%, transparent 100%)",
+                        }} />
 
-                        {/* Top index number */}
-                        <Typography
-                            sx={{
-                                position: "absolute",
-                                top: 28,
-                                right: 32,
-                                color: "rgba(255,255,255,0.15)",
-                                fontSize: "4rem",
-                                fontWeight: 900,
-                                lineHeight: 1,
-                                userSelect: "none",
-                                letterSpacing: "-2px",
-                            }}
-                        >
-                            0{index + 1}
-                        </Typography>
 
-                        {/* Bottom Text Block */}
-                        <Box
-                            sx={{
-                                position: "absolute",
-                                bottom: 0,
-                                left: 0,
-                                right: 0,
-                                padding: "36px 40px",
-                            }}
-                        >
+                        {/* Bottom text block */}
+                        <Box sx={{
+                            position: "absolute",
+                            bottom: 0, left: 0, right: 0,
+                            padding: { xs: "24px 24px", sm: "28px 32px", md: "36px 40px" },
+                        }}>
                             {/* Animated line */}
                             <Box
-                                className="category-line"
+                                className="cat-line"
                                 sx={{
-                                    width: "32px",
-                                    height: "2px",
-                                    backgroundColor: "#ffffff",
-                                    mb: 2,
+                                    width: "28px", height: "2px",
+                                    backgroundColor: "#fff",
+                                    mb: { xs: 1.5, md: 2 },
                                     transition: "width 0.4s ease",
                                 }}
                             />
 
                             <Typography
-                                className="category-label"
-                                variant="h3"
+                                className="cat-label"
                                 sx={{
-                                    color: "#ffffff",
-                                    fontWeight: 800,
-                                    letterSpacing: "0.25em",
+                                    fontFamily: "'Playfair Display', serif",
+                                    fontWeight: 900,
+                                    fontStyle: "italic",
+                                    color: "#fff",
+                                    fontSize: { xs: "1.5rem", sm: "1.8rem", md: "2.2rem" },
+                                    lineHeight: 1.05,
+                                    letterSpacing: "0.22em",
                                     textTransform: "uppercase",
-                                    fontSize: "2rem",
                                     userSelect: "none",
                                     transition: "letter-spacing 0.4s ease",
-                                    lineHeight: 1.1,
-                                    mb: 1.5,
+                                    mb: 1.2,
                                 }}
                             >
                                 {category.categoryName}
                             </Typography>
 
-                            <Typography
-                                sx={{
-                                    color: "rgba(255,255,255,0.45)",
-                                    fontSize: "0.7rem",
-                                    letterSpacing: "0.25em",
+                            {/* Explore row */}
+                            <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                                <Typography sx={{
+                                    fontFamily: "'IBM Plex Mono', monospace",
+                                    fontSize: { xs: "0.6rem", md: "0.68rem" },
+                                    letterSpacing: "0.22em",
                                     textTransform: "uppercase",
+                                    color: "rgba(255,255,255,0.4)",
                                     userSelect: "none",
-                                }}
-                            >
-                                Explore →
-                            </Typography>
+                                }}>
+                                    Explore
+                                </Typography>
+                                <Box
+                                    className="cat-arrow"
+                                    sx={{
+                                        fontFamily: "'IBM Plex Mono', monospace",
+                                        fontSize: "0.65rem",
+                                        color: "rgba(255,255,255,0.4)",
+                                        opacity: 0,
+                                        transform: "translateX(-6px)",
+                                        transition: "opacity 0.3s ease, transform 0.3s ease",
+                                        userSelect: "none",
+                                    }}
+                                >
+                                    →
+                                </Box>
+                            </Box>
                         </Box>
                     </Box>
                 ))}
-            </Stack>
+            </Box>
         </Box>
     );
 };

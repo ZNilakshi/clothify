@@ -1,18 +1,14 @@
 import {
-    Grid,
-    Card,
-    CardMedia,
-    CardContent,
     Typography,
     Chip,
-    Badge,
     Box,
     Container
 } from "@mui/material";
-import { ShoppingCart } from "@mui/icons-material";
+import { ShoppingCart, ArrowOutward } from "@mui/icons-material";
 import { useState, useEffect, useCallback } from "react";
 import axios from "axios";
 import authService from "../../services/authService";
+
 /* ─── Google Fonts ───────────────────────────────────────────── */
 if (!document.head.querySelector('link[href*="Playfair"]')) {
     const l = document.createElement("link");
@@ -20,16 +16,28 @@ if (!document.head.querySelector('link[href*="Playfair"]')) {
     l.href = "https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400;1,700;1,900&family=IBM+Plex+Mono:wght@300;400;500;600&display=swap";
     document.head.appendChild(l);
 }
-if (!document.head.querySelector("#pd-styles")) {
+if (!document.head.querySelector("#ps-styles")) {
     const s = document.createElement("style");
-    s.id = "pd-styles";
+    s.id = "ps-styles";
     s.textContent = `
-        @keyframes pdImgIn  { from{opacity:0;transform:scale(1.04)} to{opacity:1;transform:scale(1)} }
-        @keyframes pdFadeUp { from{opacity:0;transform:translateY(18px)} to{opacity:1;transform:translateY(0)} }
-        @keyframes pdSpin   { to{transform:rotate(360deg)} }
+        @keyframes psReveal {
+            from { opacity: 0; transform: translateY(24px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes psImgZoom {
+            from { transform: scale(1); }
+            to   { transform: scale(1.06); }
+        }
+        .ps-card { animation: psReveal 0.5s ease both; }
+        .ps-card:hover .ps-img { animation: psImgZoom 0.6s ease forwards; }
+        .ps-card:hover .ps-overlay { opacity: 1 !important; }
+        .ps-card:hover .ps-arrow  { opacity: 1 !important; transform: translate(0,0) !important; }
+        .ps-card:hover .ps-name   { letter-spacing: 0.06em !important; }
+        .ps-card:hover .ps-border-line { width: 100% !important; }
     `;
     document.head.appendChild(s);
 }
+
 /* ─── Backend cart fetch ─────────────────────────────────────── */
 const API = "http://localhost:8080";
 
@@ -45,8 +53,6 @@ const fetchCartMap = async () => {
         const items = Array.isArray(data)
             ? data
             : (data.items ?? data.cartItems ?? data.cart ?? []);
-
-        /* Build productId → total quantity map (sums across all variants) */
         const map = {};
         for (const item of items) {
             const pid = item.productId ?? item.product?.productId;
@@ -59,11 +65,240 @@ const fetchCartMap = async () => {
     }
 };
 
+/* ─── Product Card ───────────────────────────────────────────── */
+const ProductCard = ({ product, cartQty, getImageUrl, handleProductClick, index }) => {
+    const hasDiscount   = product.discount && parseFloat(product.discount) > 0;
+    const originalPrice = parseFloat(product.sellingPrice || product.price || 0);
+    const finalPrice    = hasDiscount && product.discountPrice
+        ? parseFloat(product.discountPrice)
+        : originalPrice;
+    const isOutOfStock  = product.stockQuantity <= 0;
+    const isLowStock    = !isOutOfStock && product.stockQuantity <= 5;
+
+    return (
+        <Box
+            className="ps-card"
+            onClick={() => handleProductClick(product.productId)}
+            sx={{
+                animationDelay: `${(index % 10) * 0.05}s`,
+                cursor: "pointer",
+                display: "flex",
+                flexDirection: "column",
+                position: "relative",
+                opacity: isOutOfStock ? 0.55 : 1,
+                /* active cart highlight */
+                "&::before": cartQty > 0 ? {
+                    content: '""',
+                    position: "absolute",
+                    inset: 0,
+                    border: "2px solid #000",
+                    zIndex: 2,
+                    pointerEvents: "none",
+                } : {},
+            }}
+        >
+            {/* ── Image container ── */}
+            <Box sx={{
+                position: "relative",
+                overflow: "hidden",
+                backgroundColor: "#f0f0eb",
+                aspectRatio: "3/4",
+            }}>
+                <Box
+                    component="img"
+                    className="ps-img"
+                    src={getImageUrl(product.imageUrl)}
+                    alt={product.productName}
+                    sx={{
+                        width: "100%",
+                        height: "100%",
+                        objectFit: "cover",
+                        display: "block",
+                        filter: isOutOfStock ? "grayscale(80%)" : "grayscale(15%)",
+                        transition: "filter 0.5s ease",
+                    }}
+                />
+
+                {/* Dark hover overlay */}
+                <Box
+                    className="ps-overlay"
+                    sx={{
+                        position: "absolute", inset: 0,
+                        backgroundColor: "rgba(0,0,0,0.35)",
+                        opacity: 0,
+                        transition: "opacity 0.4s ease",
+                    }}
+                />
+
+                {/* Arrow icon on hover */}
+                <Box
+                    className="ps-arrow"
+                    sx={{
+                        position: "absolute",
+                        bottom: 16, right: 16,
+                        width: 40, height: 40,
+                        backgroundColor: "#fff",
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        opacity: 0,
+                        transform: "translate(6px, 6px)",
+                        transition: "opacity 0.3s ease, transform 0.3s ease",
+                    }}
+                >
+                    <ArrowOutward sx={{ fontSize: 18, color: "#000" }} />
+                </Box>
+
+                {/* ── Badge strip top-left ── */}
+                <Box sx={{
+                    position: "absolute", top: 10, left: 10,
+                    display: "flex", flexDirection: "column", gap: 0.5,
+                    zIndex: 3,
+                }}>
+                    {hasDiscount && (
+                        <Box sx={{
+                            backgroundColor: "#000", color: "#fff",
+                            fontFamily: "'IBM Plex Mono', monospace",
+                            fontSize: 9, fontWeight: 600,
+                            letterSpacing: "0.12em", textTransform: "uppercase",
+                            px: 1.2, py: 0.5,
+                        }}>
+                            −{parseFloat(product.discount).toFixed(0)}%
+                        </Box>
+                    )}
+                    {isOutOfStock && (
+                        <Box sx={{
+                            backgroundColor: "#555", color: "#fff",
+                            fontFamily: "'IBM Plex Mono', monospace",
+                            fontSize: 9, fontWeight: 600,
+                            letterSpacing: "0.12em", textTransform: "uppercase",
+                            px: 1.2, py: 0.5,
+                        }}>
+                            Sold Out
+                        </Box>
+                    )}
+                    {isLowStock && (
+                        <Box sx={{
+                            backgroundColor: "#fff", color: "#000",
+                            fontFamily: "'IBM Plex Mono', monospace",
+                            fontSize: 9, fontWeight: 600,
+                            letterSpacing: "0.12em", textTransform: "uppercase",
+                            px: 1.2, py: 0.5,
+                            border: "1px solid #000",
+                        }}>
+                            {product.stockQuantity} left
+                        </Box>
+                    )}
+                </Box>
+
+                {/* ── Cart badge top-right ── */}
+                {cartQty > 0 && (
+                    <Box sx={{
+                        position: "absolute", top: 10, right: 10,
+                        backgroundColor: "#000", color: "#fff",
+                        width: 28, height: 28,
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        zIndex: 3,
+                    }}>
+                        <Typography sx={{
+                            fontFamily: "'IBM Plex Mono', monospace",
+                            fontSize: 10, fontWeight: 600,
+                        }}>
+                            {cartQty}
+                        </Typography>
+                    </Box>
+                )}
+            </Box>
+
+            {/* ── Info block ── */}
+            <Box sx={{ pt: 2, pb: 1, px: 0 }}>
+                {/* Animated underline */}
+                <Box
+                    className="ps-border-line"
+                    sx={{
+                        height: "1px",
+                        backgroundColor: "#000",
+                        width: "32px",
+                        mb: 1.5,
+                        transition: "width 0.4s ease",
+                    }}
+                />
+
+                {/* Product name */}
+                <Typography
+                    className="ps-name"
+                    sx={{
+                        fontFamily: "'Playfair Display', serif",
+                        fontWeight: 700,
+                        fontStyle: "italic",
+                        fontSize: { xs: 14, md: 16 },
+                        lineHeight: 1.2,
+                        letterSpacing: "0.02em",
+                        color: "#000",
+                        mb: 0.8,
+                        transition: "letter-spacing 0.3s ease",
+                        display: "-webkit-box",
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: "vertical",
+                        overflow: "hidden",
+                    }}
+                >
+                    {product.productName}
+                </Typography>
+
+                {/* Price row */}
+                <Box sx={{ display: "flex", alignItems: "baseline", gap: 1.2, mt: 1 }}>
+                    <Typography sx={{
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontWeight: 600, fontSize: 14,
+                        color: "#000", letterSpacing: "-0.02em",
+                    }}>
+                        Rs {finalPrice.toFixed(2)}
+                    </Typography>
+                    {hasDiscount && (
+                        <Typography sx={{
+                            fontFamily: "'IBM Plex Mono', monospace",
+                            fontWeight: 400, fontSize: 11,
+                            color: "#aaa",
+                            textDecoration: "line-through",
+                        }}>
+                            Rs {originalPrice.toFixed(2)}
+                        </Typography>
+                    )}
+                </Box>
+
+                {/* Stock status */}
+                <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mt: 1 }}>
+                    <Typography sx={{
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontSize: 9, letterSpacing: "0.14em",
+                        textTransform: "uppercase",
+                        color: isOutOfStock ? "#999" : isLowStock ? "#888" : "#aaa",
+                    }}>
+                        {isOutOfStock ? "Unavailable" : isLowStock ? `Only ${product.stockQuantity} remaining` : "In stock"}
+                    </Typography>
+
+                    {cartQty > 0 && (
+                        <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+                            <ShoppingCart sx={{ fontSize: 10, color: "#000" }} />
+                            <Typography sx={{
+                                fontFamily: "'IBM Plex Mono', monospace",
+                                fontSize: 9, fontWeight: 600,
+                                letterSpacing: "0.1em", color: "#000",
+                            }}>
+                                {cartQty} in cart
+                            </Typography>
+                        </Box>
+                    )}
+                </Box>
+            </Box>
+        </Box>
+    );
+};
+
 /* ─── Main Component ─────────────────────────────────────────── */
 const ProductSection = ({
     products,
     getImageUrl,
-    getCartQuantity, /* kept for API compatibility, overridden by backend data */
+    getCartQuantity,
     handleProductClick,
 }) => {
     const [cartMap, setCartMap] = useState({});
@@ -79,262 +314,66 @@ const ProductSection = ({
         return () => window.removeEventListener("cartUpdated", refreshCart);
     }, [refreshCart]);
 
+    if (!products.length) return null;
+
     return (
-        <Box
-            sx={{
-                minHeight: "100vh",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                py: 8,
-            }}
-        >
+        <Box sx={{ backgroundColor: "#f5f5f0", pb: 10 }}>
             <Container maxWidth="xl">
-                <Grid container spacing={2} justifyContent="center">
-                    {products.map((product) => {
-                        /* Backend cart count; falls back to prop while map is loading */
+                {/* ── Grid ── */}
+                <Box sx={{
+                    display: "grid",
+                    gridTemplateColumns: {
+                        xs: "repeat(2, 1fr)",
+                        sm: "repeat(3, 1fr)",
+                        md: "repeat(4, 1fr)",
+                        lg: "repeat(5, 1fr)",
+                    },
+                    gap: { xs: 2, md: 3 },
+                    /* Top border rule across full grid */
+                    borderTop: "1px solid #d8d8d0",
+                    pt: 4,
+                }}>
+                    {products.map((product, index) => {
                         const cartQty = cartMap[product.productId]
                             ?? getCartQuantity?.(product.productId)
                             ?? 0;
-
-                        const hasDiscount   = product.discount && parseFloat(product.discount) > 0;
-                        const originalPrice = parseFloat(product.sellingPrice || product.price || 0);
-                        const finalPrice    = hasDiscount && product.discountPrice
-                            ? parseFloat(product.discountPrice)
-                            : originalPrice;
-                        const isOutOfStock  = product.stockQuantity <= 0;
-
                         return (
-                            <Grid
-                                item
+                            <ProductCard
                                 key={product.productId}
-                                sx={{
-                                    flexBasis: { xs: "50%", sm: "33.33%", md: "20%" },
-                                    maxWidth:  { xs: "50%", sm: "33.33%", md: "20%" },
-                                    display: "flex",
-                                    justifyContent: "center",
-                                }}
-                            >
-                                <Card
-                                    sx={{
-                                        width: "100%",
-                                        borderRadius: 4,
-                                        cursor: "pointer",
-                                        position: "relative",
-                                        display: "flex",
-                                        flexDirection: "column",
-                                        transition: "0.4s cubic-bezier(0.4, 0, 0.2, 1)",
-                                        opacity: isOutOfStock ? 0.6 : 1,
-                                        /* Subtle border highlight when item is in cart */
-                                        outline: cartQty > 0 ? "2px solid #000" : "none",
-                                        outlineOffset: "-2px",
-                                        "&:hover": {
-                                            transform: "translateY(-10px)",
-                                            boxShadow: "0 20px 40px rgba(0,0,0,0.08)",
-                                        },
-                                    }}
-                                    onClick={() => handleProductClick(product.productId)}
-                                >
-                                    {/* ── TOP BADGES ── */}
-                                    <Box sx={{
-                                        position: "absolute",
-                                        top: 8, left: 8, right: 8,
-                                        zIndex: 2,
-                                        display: "flex",
-                                        justifyContent: "space-between",
-                                        flexWrap: "wrap",
-                                        gap: 0.5,
-                                    }}>
-                                        {/* Left side */}
-                                        <Box sx={{ display: "flex", gap: 0.5, flexWrap: "wrap" }}>
-                                            {hasDiscount && (
-                                                <Chip
-                                                    label={`${parseFloat(product.discount).toFixed(0)}% OFF`}
-                                                    size="small"
-                                                    sx={{ backgroundColor: "#d32f2f", color: "#fff", fontWeight: "bold", fontSize: 10, height: 22 }}
-                                                />
-                                            )}
-                                            {isOutOfStock && (
-                                                <Chip
-                                                    label="Out of Stock"
-                                                    size="small"
-                                                    sx={{ backgroundColor: "#616161", color: "#fff", fontWeight: "bold", fontSize: 10, height: 22 }}
-                                                />
-                                            )}
-                                            {!isOutOfStock && product.stockQuantity <= 5 && (
-                                                <Chip
-                                                    label={`Only ${product.stockQuantity} left!`}
-                                                    size="small"
-                                                    sx={{ backgroundColor: "#ff9800", color: "#fff", fontWeight: "bold", fontSize: 10, height: 22 }}
-                                                />
-                                            )}
-                                        </Box>
-
-                                        {/* Right side — in-cart chip */}
-                                        {cartQty > 0 && (
-                                            <Chip
-                                                label={`${cartQty} in cart`}
-                                                size="small"
-                                                icon={<ShoppingCart sx={{ fontSize: "12px !important", color: "#fff !important" }} />}
-                                                sx={{
-                                                    ml: "auto",
-                                                    backgroundColor: "#000",
-                                                    color: "#fff",
-                                                    fontWeight: "bold",
-                                                    fontSize: 10,
-                                                    height: 22,
-                                                    "& .MuiChip-icon": { color: "#fff" },
-                                                }}
-                                            />
-                                        )}
-                                    </Box>
-
-                                    <CardMedia
-                                        component="img"
-                                        sx={{
-                                            height: 260,
-                                            objectFit: "cover",
-                                            filter: isOutOfStock ? "grayscale(50%)" : "none",
-                                        }}
-                                        image={getImageUrl(product.imageUrl)}
-                                        alt={product.productName}
-                                    />
-
-                                    <CardContent sx={{ flexGrow: 1, p: 2 }}>
-                                        {/* Name */}
-                                        <Typography
-                                            variant="subtitle1"
-                                            fontWeight="700"
-                                            noWrap
-                                            sx={{
-                                                mb: 0.5,
-                                                textTransform: "uppercase",
-                                                letterSpacing: 1,
-                                                fontFamily: "'Playfair Display', serif", // ← applied
-                                            }}
-                                        >
-                                            {product.productName}
-                                        </Typography>
-
-                                        {/* Description */}
-                                        <Typography
-                                            variant="body2"
-                                            color="text.secondary"
-                                            sx={{
-                                                mb: 2,
-                                                display: "-webkit-box",
-                                                WebkitLineClamp: 2,
-                                                WebkitBoxOrient: "vertical",
-                                                overflow: "hidden",
-                                                height: "40px",
-                                                lineHeight: "20px",
-                                                fontFamily: "'IBM Plex Mono', monospace", // ← applied
-                                            }}
-                                        >
-                                            {product.productDescription || "No description available for this premium item."}
-                                        </Typography>
-
-                                        {/* Price + cart indicator */}
-                                        <Box sx={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between" }}>
-                                            {/* Price block */}
-                                            <Box>
-                                                {hasDiscount ? (
-                                                    <>
-                                                        <Typography
-                                                            variant="caption"
-                                                            sx={{
-                                                                textDecoration: "line-through",
-                                                                color: "text.secondary",
-                                                                display: "block",
-                                                                lineHeight: 1.2,
-                                                                fontFamily: "'IBM Plex Mono', monospace", // ← applied
-                                                            }}
-                                                        >
-                                                            Rs {originalPrice.toFixed(2)}
-                                                        </Typography>
-                                                        <Typography
-                                                            variant="h6"
-                                                            fontWeight="800"
-                                                            color="#000"
-                                                            lineHeight={1.2}
-                                                            sx={{ fontFamily: "'IBM Plex Mono', monospace" }} // ← applied
-                                                        >
-                                                            Rs {finalPrice.toFixed(2)}
-                                                        </Typography>
-                                                        <Typography
-                                                            variant="caption"
-                                                            fontWeight="bold"
-                                                            color="#d32f2f"
-                                                            display="block"
-                                                            sx={{ fontFamily: "'IBM Plex Mono', monospace" }} // ← applied
-                                                        >
-                                                            Save Rs {(originalPrice - finalPrice).toFixed(2)}
-                                                        </Typography>
-                                                    </>
-                                                ) : (
-                                                    <Typography
-                                                        color="#000"
-                                                        fontWeight="800"
-                                                        variant="h6"
-                                                        sx={{ fontFamily: "'IBM Plex Mono', monospace" }} // ← applied
-                                                    >
-                                                        Rs {originalPrice.toFixed(2)}
-                                                    </Typography>
-                                                )}
-
-                                                {/* Stock status */}
-                                                {isOutOfStock ? (
-                                                    <Typography
-                                                        variant="caption"
-                                                        color="error"
-                                                        fontWeight="bold"
-                                                        sx={{ fontFamily: "'IBM Plex Mono', monospace" }} // ← applied
-                                                    >
-                                                        Out of stock
-                                                    </Typography>
-                                                ) : product.stockQuantity <= 5 ? (
-                                                    <Typography
-                                                        variant="caption"
-                                                        color="warning.main"
-                                                        sx={{ fontFamily: "'IBM Plex Mono', monospace" }} // ← applied
-                                                    >
-                                                        Only {product.stockQuantity} left
-                                                    </Typography>
-                                                ) : (
-                                                    <Typography
-                                                        variant="caption"
-                                                        color="success.main"
-                                                        sx={{ fontFamily: "'IBM Plex Mono', monospace" }} // ← applied
-                                                    >
-                                                        In stock
-                                                    </Typography>
-                                                )}
-                                            </Box>
-
-                                            {/* Cart indicator circle */}
-                                            <Box sx={{
-                                                width: 40, height: 40,
-                                                borderRadius: "50%",
-                                                backgroundColor: cartQty > 0 ? "#000" : "#f5f5f5",
-                                                color: cartQty > 0 ? "#fff" : "#000",
-                                                display: "flex", alignItems: "center", justifyContent: "center",
-                                                transition: "all 0.3s",
-                                            }}>
-                                                <Badge
-                                                    badgeContent={cartQty > 0 ? cartQty : null}
-                                                    color="error"
-                                                    sx={{ "& .MuiBadge-badge": { fontSize: 10, height: 18, minWidth: 18 } }}
-                                                >
-                                                    <ShoppingCart fontSize="small" />
-                                                </Badge>
-                                            </Box>
-                                        </Box>
-                                    </CardContent>
-                                </Card>
-                            </Grid>
+                                product={product}
+                                cartQty={cartQty}
+                                getImageUrl={getImageUrl}
+                                handleProductClick={handleProductClick}
+                                index={index}
+                            />
                         );
                     })}
-                </Grid>
+                </Box>
+
+                {/* ── Footer rule ── */}
+                <Box sx={{
+                    mt: 8, pt: 3,
+                    borderTop: "2px solid #000",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                }}>
+                    <Typography sx={{
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontSize: 9, letterSpacing: "0.18em",
+                        textTransform: "uppercase", color: "#aaa",
+                    }}>
+                        {products.length} products shown
+                    </Typography>
+                    <Typography sx={{
+                        fontFamily: "'Playfair Display', serif",
+                        fontWeight: 900, fontStyle: "italic",
+                        fontSize: 11, color: "#ccc",
+                        letterSpacing: "0.05em",
+                    }}>
+                        End of collection
+                    </Typography>
+                </Box>
             </Container>
         </Box>
     );
